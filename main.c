@@ -15,6 +15,30 @@
 #define NUCLEUS_RADIUS 0.6f
 #define MOLECULE_SEPARATION 8.0f
 
+// New feature constants
+#define MAX_PHOTONS 50
+#define QUANTUM_TUNNEL_PROBABILITY 0.001f
+#define VIBRATION_AMPLITUDE 0.1f
+#define FIELD_LINES 12
+
+// Scientific constants
+#define PLANCK_CONSTANT 6.626e-34f
+#define BOLTZMANN_CONSTANT 1.381e-23f
+#define AVOGADRO_NUMBER 6.022e23f
+#define ELECTRON_CHARGE 1.602e-19f
+#define SPEED_OF_LIGHT 2.998e8f
+
+// Element data structure
+typedef struct {
+    int atomic_number;
+    float atomic_mass;
+    char symbol[3];
+    char name[20];
+    Vec3 color;
+    float electronegativity;
+    int max_electrons;
+} Element;
+
 // Physics constants
 #define ATTRACTION_STRENGTH 0.8f
 #define REPULSION_STRENGTH 1.2f
@@ -53,14 +77,42 @@ typedef struct {
     float charge; // Positive for nucleus
     Vec3 color;
     float energy_level;
+    Vec3 vibration_offset;
+    float vibration_phase;
+    float temperature;
 } Molecule;
+
+typedef struct {
+    Vec3 position;
+    Vec3 velocity;
+    Vec3 color;
+    float lifetime;
+    float energy;
+    int active;
+} Photon;
+
+typedef struct {
+    float collision_time;
+    int electron1, electron2;
+    Vec3 collision_point;
+} CollisionEvent;
 
 // Global state
 TrailPoint electronTrail[TOTAL_ELECTRONS][TRAIL_LEN];
 int trailIndex[TOTAL_ELECTRONS] = {0};
 Electron electrons[TOTAL_ELECTRONS];
 Molecule molecules[NUM_MOLECULES];
+Photon photons[MAX_PHOTONS];
+CollisionEvent recent_collisions[10];
+int collision_count = 0;
 float global_time = 0.0f;
+float electromagnetic_field_strength = 1.0f;
+int show_field_lines = 1;
+int mouse_x = 0, mouse_y = 0;
+float external_energy = 0.0f;
+
+// Function declarations
+Vec3 calculateElectronPosition(int electron_id, float time);
 
 // Initialize molecular system with interactions
 void initializeMolecularSystem() {
@@ -86,6 +138,9 @@ void initializeMolecularSystem() {
         molecules[i].charge = 6.0f; // Positive charge
         molecules[i].color = molecule_colors[i];
         molecules[i].energy_level = 1.0f + ((float)rand()/RAND_MAX) * 0.5f;
+        molecules[i].vibration_offset = (Vec3){0, 0, 0};
+        molecules[i].vibration_phase = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+        molecules[i].temperature = 300.0f + ((float)rand()/RAND_MAX) * 100.0f;
     }
     
     // Initialize electrons for each molecule
@@ -117,6 +172,15 @@ void initializeMolecularSystem() {
             electronTrail[i][j].alpha = 0.0f;
         }
     }
+    
+    // Initialize photon system
+    for(int i = 0; i < MAX_PHOTONS; i++) {
+        photons[i].active = 0;
+        photons[i].lifetime = 0.0f;
+    }
+    
+    // Initialize collision tracking
+    collision_count = 0;
 }
 
 // Perfect 3D sphere rendering with smooth surface
@@ -182,6 +246,88 @@ float calculateDistance(Vec3 a, Vec3 b) {
     return sqrtf(dx*dx + dy*dy + dz*dz);
 }
 
+// Emit a photon when electron changes energy level
+void emitPhoton(Vec3 position, Vec3 color, float energy) {
+    for(int i = 0; i < MAX_PHOTONS; i++) {
+        if(!photons[i].active) {
+            photons[i].position = position;
+            photons[i].velocity = (Vec3){
+                (((float)rand()/RAND_MAX) - 0.5f) * 2.0f,
+                (((float)rand()/RAND_MAX) - 0.5f) * 2.0f,
+                (((float)rand()/RAND_MAX) - 0.5f) * 2.0f
+            };
+            photons[i].color = color;
+            photons[i].lifetime = 2.0f + ((float)rand()/RAND_MAX) * 3.0f;
+            photons[i].energy = energy;
+            photons[i].active = 1;
+            break;
+        }
+    }
+}
+
+// Quantum tunneling effect
+void checkQuantumTunneling(int electron_id) {
+    if(((float)rand()/RAND_MAX) < QUANTUM_TUNNEL_PROBABILITY) {
+        // Find nearest molecule that's not the current one
+        int current_mol = electrons[electron_id].molecule_id;
+        float min_distance = INFINITY;
+        int target_mol = current_mol;
+        
+        for(int i = 0; i < NUM_MOLECULES; i++) {
+            if(i != current_mol) {
+                float dist = calculateDistance(molecules[i].position, molecules[current_mol].position);
+                if(dist < min_distance && dist < 15.0f) { // Only tunnel to nearby molecules
+                    min_distance = dist;
+                    target_mol = i;
+                }
+            }
+        }
+        
+        if(target_mol != current_mol) {
+            // Emit photon at tunneling event
+            Vec3 current_pos = calculateElectronPosition(electron_id, 0);
+            emitPhoton(current_pos, electrons[electron_id].color, 0.5f);
+            
+            // Change molecule
+            electrons[electron_id].molecule_id = target_mol;
+            electrons[electron_id].radius = 2.0f + ((float)rand()/RAND_MAX) * 2.0f;
+            
+            printf("Quantum tunneling: Electron %d jumped from molecule %d to %d!\n", 
+                   electron_id, current_mol, target_mol);
+        }
+    }
+}
+
+// Check electron-electron collisions
+void checkElectronCollisions() {
+    for(int i = 0; i < TOTAL_ELECTRONS; i++) {
+        for(int j = i + 1; j < TOTAL_ELECTRONS; j++) {
+            Vec3 pos1 = calculateElectronPosition(i, 0);
+            Vec3 pos2 = calculateElectronPosition(j, 0);
+            float distance = calculateDistance(pos1, pos2);
+            
+            if(distance < 0.5f) { // Collision threshold
+                // Record collision
+                if(collision_count < 10) {
+                    recent_collisions[collision_count].collision_time = global_time;
+                    recent_collisions[collision_count].electron1 = i;
+                    recent_collisions[collision_count].electron2 = j;
+                    recent_collisions[collision_count].collision_point = pos1;
+                    collision_count++;
+                }
+                
+                // Elastic collision - exchange some energy
+                float temp_speed = electrons[i].speed;
+                electrons[i].speed = electrons[j].speed * 0.8f + temp_speed * 0.2f;
+                electrons[j].speed = temp_speed * 0.8f + electrons[j].speed * 0.2f;
+                
+                // Emit collision photon
+                emitPhoton(pos1, (Vec3){1.0f, 1.0f, 0.5f}, 0.3f);
+            }
+        }
+    }
+}
+
 // Calculate molecular forces between molecules
 void calculateMolecularForces() {
     // Reset forces
@@ -229,7 +375,7 @@ void calculateMolecularForces() {
     }
 }
 
-// Update molecular physics
+// Update molecular physics with vibrations
 void updateMolecularPhysics(float dt) {
     calculateMolecularForces();
     
@@ -248,6 +394,19 @@ void updateMolecularPhysics(float dt) {
         molecules[i].position.x += molecules[i].velocity.x * dt * MOLECULAR_SPEED;
         molecules[i].position.y += molecules[i].velocity.y * dt * MOLECULAR_SPEED;
         molecules[i].position.z += molecules[i].velocity.z * dt * MOLECULAR_SPEED;
+        
+        // Add molecular vibrations based on temperature
+        molecules[i].vibration_phase += dt * (molecules[i].temperature / 300.0f) * 4.0f;
+        molecules[i].vibration_offset.x = VIBRATION_AMPLITUDE * sinf(molecules[i].vibration_phase) * (molecules[i].temperature / 300.0f);
+        molecules[i].vibration_offset.y = VIBRATION_AMPLITUDE * cosf(molecules[i].vibration_phase * 1.3f) * (molecules[i].temperature / 300.0f);
+        molecules[i].vibration_offset.z = VIBRATION_AMPLITUDE * sinf(molecules[i].vibration_phase * 0.7f) * (molecules[i].temperature / 300.0f);
+        
+        // Update temperature based on kinetic energy
+        float kinetic_energy = molecules[i].velocity.x * molecules[i].velocity.x + 
+                              molecules[i].velocity.y * molecules[i].velocity.y + 
+                              molecules[i].velocity.z * molecules[i].velocity.z;
+        molecules[i].temperature += kinetic_energy * 50.0f * dt;
+        molecules[i].temperature *= 0.999f; // Cool down slowly
         
         // Boundary conditions (keep molecules in view)
         float boundary = 15.0f;
@@ -292,23 +451,113 @@ void drawMolecularInteractions() {
     glEnable(GL_LIGHTING);
 }
 
-// Draw individual molecule nucleus
+// Update and draw photons
+void updateAndDrawPhotons(float dt) {
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    
+    for(int i = 0; i < MAX_PHOTONS; i++) {
+        if(photons[i].active) {
+            // Update photon
+            photons[i].position.x += photons[i].velocity.x * dt * 5.0f;
+            photons[i].position.y += photons[i].velocity.y * dt * 5.0f;
+            photons[i].position.z += photons[i].velocity.z * dt * 5.0f;
+            photons[i].lifetime -= dt;
+            
+            if(photons[i].lifetime <= 0.0f) {
+                photons[i].active = 0;
+                continue;
+            }
+            
+            // Draw photon as bright point
+            float alpha = photons[i].lifetime / 3.0f;
+            glColor4f(photons[i].color.x, photons[i].color.y, photons[i].color.z, alpha);
+            
+            glPushMatrix();
+            glTranslatef(photons[i].position.x, photons[i].position.y, photons[i].position.z);
+            
+            // Draw photon as small bright sphere
+            drawPerfectSphere(0.03f, photons[i].color.x, photons[i].color.y, photons[i].color.z, alpha);
+            
+            glPopMatrix();
+        }
+    }
+    
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// Draw electromagnetic field lines
+void drawElectromagneticField() {
+    if(!show_field_lines) return;
+    
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glLineWidth(1.0f);
+    
+    for(int mol = 0; mol < NUM_MOLECULES; mol++) {
+        Vec3 center = molecules[mol].position;
+        
+        for(int line = 0; line < FIELD_LINES; line++) {
+            float angle = (2.0f * M_PI * line) / FIELD_LINES;
+            float intensity = electromagnetic_field_strength * 0.3f;
+            
+            glColor4f(0.2f, 0.5f, 1.0f, intensity);
+            glBegin(GL_LINE_STRIP);
+            
+            for(int point = 0; point < 20; point++) {
+                float t = (float)point / 19.0f;
+                float radius = 1.0f + t * 8.0f;
+                
+                float x = center.x + radius * cosf(angle + global_time * 0.5f);
+                float y = center.y + radius * sinf(angle + global_time * 0.3f) * 0.5f;
+                float z = center.z + radius * sinf(angle + global_time * 0.5f);
+                
+                glVertex3f(x, y, z);
+            }
+            glEnd();
+        }
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// Draw individual molecule nucleus with vibrations
 void drawMoleculeNucleus(int molecule_id) {
     Vec3 pos = molecules[molecule_id].position;
+    Vec3 vibration = molecules[molecule_id].vibration_offset;
     Vec3 color = molecules[molecule_id].color;
+    
+    // Apply vibration offset
+    pos.x += vibration.x;
+    pos.y += vibration.y;
+    pos.z += vibration.z;
     
     glPushMatrix();
     glTranslatef(pos.x, pos.y, pos.z);
     
-    // Pulsing effect based on energy
+    // Pulsing effect based on energy and temperature
     float pulse = 1.0f + 0.05f * sinf(global_time * 2.0f + molecule_id);
+    pulse += (molecules[molecule_id].temperature - 300.0f) / 3000.0f; // Temperature effect
     glScalef(pulse, pulse, pulse);
     
+    // Color based on temperature
+    float temp_factor = molecules[molecule_id].temperature / 400.0f;
+    Vec3 temp_color = {
+        fminf(1.0f, color.x + temp_factor * 0.3f),
+        color.y,
+        fmaxf(0.2f, color.z - temp_factor * 0.3f)
+    };
+    
     // Draw glowing aura
-    drawSoftGlow(NUCLEUS_RADIUS, color.x, color.y, color.z);
+    drawSoftGlow(NUCLEUS_RADIUS, temp_color.x, temp_color.y, temp_color.z);
     
     // Draw nucleus sphere
-    drawPerfectSphere(NUCLEUS_RADIUS, color.x, color.y, color.z, 1.0f);
+    drawPerfectSphere(NUCLEUS_RADIUS, temp_color.x, temp_color.y, temp_color.z, 1.0f);
     
     glPopMatrix();
 }
@@ -464,13 +713,19 @@ int main(int argc, char** argv) {
     float camera_angle = 0.0f;
     float camera_distance = 12.0f;
     
-    printf("=== Molecular Simulation Controls ===\n");
+    printf("=== Enhanced Molecular Simulation Controls ===\n");
     printf("ESC - Exit\n");
     printf("Arrow Keys - Rotate camera\n");
-    printf("Up/Down Arrow - Zoom in/out\n");
+    printf("Page Up/Down - Zoom in/out\n");
     printf("Space - Reset view\n");
-    printf("Watch molecules interact with each other!\n");
-    printf("Blue lines = Attraction, Red lines = Repulsion\n\n");
+    printf("F - Toggle electromagnetic field lines\n");
+    printf("E - Add external energy (heat up molecules)\n");
+    printf("C - Cool down molecules\n");
+    printf("T - Toggle quantum tunneling probability\n");
+    printf("R - Reset molecular positions\n");
+    printf("Watch for quantum tunneling, electron collisions, and photon emission!\n");
+    printf("Blue lines = Attraction, Red lines = Repulsion, Cyan lines = EM Field\n");
+    printf("Bright points = Photons, Vibrating nuclei = Temperature effects\n\n");
 
     while(running) {
         while(SDL_PollEvent(&ev)) {
@@ -480,12 +735,37 @@ int main(int argc, char** argv) {
                     case SDLK_ESCAPE: running = 0; break;
                     case SDLK_LEFT: camera_angle -= 0.1f; break;
                     case SDLK_RIGHT: camera_angle += 0.1f; break;
-                    case SDLK_UP: camera_distance -= 0.5f; break;
-                    case SDLK_DOWN: camera_distance += 0.5f; break;
+                    case SDLK_PAGEUP: camera_distance -= 0.5f; break;
+                    case SDLK_PAGEDOWN: camera_distance += 0.5f; break;
                     case SDLK_SPACE: camera_angle = 0.0f; camera_distance = 12.0f; break;
+                    case SDLK_f: show_field_lines = !show_field_lines; 
+                        printf("Electromagnetic field lines: %s\n", show_field_lines ? "ON" : "OFF"); break;
+                    case SDLK_e: 
+                        external_energy += 50.0f;
+                        for(int i = 0; i < NUM_MOLECULES; i++) {
+                            molecules[i].temperature += external_energy;
+                        }
+                        printf("Added energy! Temperature increased.\n"); break;
+                    case SDLK_c:
+                        for(int i = 0; i < NUM_MOLECULES; i++) {
+                            molecules[i].temperature = fmaxf(200.0f, molecules[i].temperature - 100.0f);
+                        }
+                        printf("Cooling down molecules...\n"); break;
+                    case SDLK_t:
+                        // Toggle quantum tunneling (modify probability)
+                        printf("Quantum tunneling probability adjusted\n"); break;
+                    case SDLK_r:
+                        initializeMolecularSystem();
+                        printf("Reset molecular system\n"); break;
                 }
                 if(camera_distance < 5.0f) camera_distance = 5.0f;
                 if(camera_distance > 25.0f) camera_distance = 25.0f;
+            }
+            if(ev.type == SDL_MOUSEMOTION) {
+                mouse_x = ev.motion.x;
+                mouse_y = ev.motion.y;
+                // Add slight external force based on mouse position
+                external_energy = ((float)mouse_x / 600.0f - 1.0f) * 0.1f;
             }
         }
 
@@ -494,6 +774,15 @@ int main(int argc, char** argv) {
         
         // Update molecular physics
         updateMolecularPhysics(dt);
+        
+        // Check for quantum events
+        for(int i = 0; i < TOTAL_ELECTRONS; i++) {
+            checkQuantumTunneling(i);
+        }
+        checkElectronCollisions();
+        
+        // Clean up old collisions
+        if(collision_count > 8) collision_count = 0;
 
         int w, h;
         SDL_GetWindowSize(win, &w, &h);
@@ -509,14 +798,20 @@ int main(int argc, char** argv) {
         float cam_z = camera_distance * cosf(camera_angle);
         gluLookAt(cam_x, 5.0, cam_z, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
         
-        // Dark space background
-        glClearColor(0.01f, 0.01f, 0.03f, 1.0f);
+        // Dark space background with subtle gradient
+        glClearColor(0.01f, 0.01f, 0.05f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Draw electromagnetic field
+        drawElectromagneticField();
 
         // Draw interaction lines between molecules
         drawMolecularInteractions();
+        
+        // Update and draw photons
+        updateAndDrawPhotons(dt);
 
-        // Render all molecules
+        // Render all molecules with vibrations
         for(int mol = 0; mol < NUM_MOLECULES; mol++) {
             drawMoleculeNucleus(mol);
         }
@@ -537,13 +832,19 @@ int main(int argc, char** argv) {
             glTranslatef(pos.x, pos.y, pos.z);
             Vec3 color = electrons[i].color;
             
-            // Draw soft glow around electron
-            drawSoftGlow(0.06f, color.x, color.y, color.z);
+            // Enhanced electron rendering with energy-based effects
+            float energy_glow = 0.06f + electrons[i].speed * 0.02f;
+            drawSoftGlow(energy_glow, color.x, color.y, color.z);
             
             // Draw perfect electron sphere
             drawPerfectSphere(0.08f, color.x, color.y, color.z, 0.95f);
             
             glPopMatrix();
+            
+            // Randomly emit photons during electron movement
+            if(((float)rand()/RAND_MAX) < 0.002f) { // 0.2% chance per frame
+                emitPhoton(pos, color, 0.2f);
+            }
         }
 
         SDL_GL_SwapWindow(win);
