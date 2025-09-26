@@ -17,9 +17,33 @@
 
 // New feature constants
 #define MAX_PHOTONS 50
-#define QUANTUM_TUNNEL_PROBABILITY 0.001f
+#define QUANTUM_TUNNEL_PROBABILITY 0.0001f  // Reduced from 0.001f
 #define VIBRATION_AMPLITUDE 0.1f
 #define FIELD_LINES 12
+
+// Visual enhancement constants
+#define MAX_EXPLOSION_PARTICLES 200
+#define EXPLOSION_LIFETIME 2.0f
+#define BLOOM_INTENSITY 0.6f
+#define VOLUMETRIC_SAMPLES 20
+
+// Physics extension constants
+#define GRAVITATIONAL_CONSTANT 6.67e-11f
+#define MAGNETIC_PERMEABILITY 4.0e-7f * 3.14159f
+#define VDW_EPSILON 0.2f  // Well depth
+#define VDW_SIGMA 2.5f    // Distance at zero potential
+
+// Molecule formation constants
+#define MAX_FORMED_MOLECULES 10
+#define BOND_FORMATION_DISTANCE 2.8f
+#define BOND_BREAK_DISTANCE 4.5f
+#define H2O_ANGLE 104.5f * 3.14159f / 180.0f  // Water bond angle
+#define NH3_ANGLE 107.0f * 3.14159f / 180.0f  // Ammonia bond angle
+
+// Molecular interaction constants
+#define BONDING_DISTANCE 3.0f
+#define STRONG_INTERACTION_DISTANCE 5.0f
+#define DRAG_SENSITIVITY 0.1f
 
 // Scientific constants
 #define PLANCK_CONSTANT 6.626e-34f
@@ -102,14 +126,52 @@ typedef struct {
     Vec3 collision_point;
 } CollisionEvent;
 
-// Element database (simplified periodic table)
+// Explosion particle system
+typedef struct {
+    Vec3 position;
+    Vec3 velocity;
+    Vec3 color;
+    float lifetime;
+    float max_lifetime;
+    float size;
+    int active;
+    int explosion_type; // 0=collision, 1=tunneling, 2=bonding
+} ExplosionParticle;
+
+// Enhanced Van der Waals force
+typedef struct {
+    float epsilon;  // Well depth
+    float sigma;    // Distance at zero potential
+    float r_min;    // Distance at minimum potential
+} VdWParameters;
+
+// Molecular structure definitions
+typedef struct {
+    int atom_count;
+    int atom_types[4];  // Element indices
+    Vec3 positions[4];  // Relative positions
+    float bond_lengths[6]; // Maximum 6 bonds for 4 atoms
+    float bond_angles[3];  // Bond angles
+    char formula[10];
+    float formation_energy;
+    int active;
+} FormedMolecule;
+
+// Gravitational field structure
+typedef struct {
+    Vec3 position;
+    float mass;
+    float influence_radius;
+} GravitySource;
+
+// Element database with accurate atomic radii (pm)
 Element elements[] = {
-    {1, 1.008f, "H", "Hydrogen", 0.9f, 0.9f, 0.9f, 2.20f, 1},
-    {6, 12.011f, "C", "Carbon", 0.3f, 0.3f, 0.3f, 2.55f, 6},
-    {7, 14.007f, "N", "Nitrogen", 0.2f, 0.6f, 1.0f, 3.04f, 7},
-    {8, 15.999f, "O", "Oxygen", 1.0f, 0.2f, 0.2f, 3.44f, 8},
-    {9, 18.998f, "F", "Fluorine", 0.9f, 1.0f, 0.2f, 3.98f, 9},
-    {10, 20.180f, "Ne", "Neon", 1.0f, 0.4f, 0.8f, 0.0f, 10}
+    {1, 1.008f, "H", "Hydrogen", 0.9f, 0.9f, 0.9f, 2.20f, 1},        // 53 pm
+    {6, 12.011f, "C", "Carbon", 0.3f, 0.3f, 0.3f, 2.55f, 6},         // 67 pm  
+    {7, 14.007f, "N", "Nitrogen", 0.2f, 0.6f, 1.0f, 3.04f, 7},       // 56 pm
+    {8, 15.999f, "O", "Oxygen", 1.0f, 0.2f, 0.2f, 3.44f, 8},         // 48 pm
+    {9, 18.998f, "F", "Fluorine", 0.9f, 1.0f, 0.2f, 3.98f, 9},       // 42 pm
+    {10, 20.180f, "Ne", "Neon", 1.0f, 0.4f, 0.8f, 0.0f, 10}          // 38 pm
 };
 
 // Global state
@@ -126,6 +188,17 @@ int show_field_lines = 1;
 int mouse_x = 0, mouse_y = 0;
 float external_energy = 0.0f;
 
+// New enhanced systems
+ExplosionParticle explosion_particles[MAX_EXPLOSION_PARTICLES];
+FormedMolecule formed_molecules[MAX_FORMED_MOLECULES];
+GravitySource gravity_sources[NUM_MOLECULES];
+VdWParameters vdw_params[6]; // For each element type
+int show_explosions = 1;
+int show_gravity_field = 0;
+int show_vdw_potential = 0;
+int show_formed_molecules = 1;
+float bloom_effect_intensity = BLOOM_INTENSITY;
+
 // Scientific analysis data
 float total_system_energy = 0.0f;
 float average_temperature = 0.0f;
@@ -134,6 +207,39 @@ int total_photons_emitted = 0;
 float magnetic_field_strength = 0.5f;
 int current_element_index = 1; // Start with Carbon
 
+// Performance monitoring
+float fps = 0.0f;
+Uint32 frame_count = 0;
+Uint32 fps_timer = 0;
+float frame_time_ms = 0.0f;
+float memory_usage_mb = 0.0f;
+int show_performance_overlay = 1;
+int show_help_overlay = 0;
+
+// Molecular interaction and dragging
+int dragging_molecule = -1;
+Vec3 drag_offset = {0, 0, 0};
+int mouse_button_down = 0;
+float chemical_bonds[NUM_MOLECULES][NUM_MOLECULES]; // Bond strengths between molecules
+
+// Real electron shell configurations
+typedef struct {
+    int n, l, j; // Quantum numbers: principal, angular momentum, total angular momentum
+    int max_electrons;
+    float energy_level;
+    float radius_nm;
+} ElectronShell;
+
+ElectronShell shells[] = {
+    {1, 0, 1, 2, -13.6f, 0.529f},  // 1s
+    {2, 0, 1, 2, -3.4f, 2.116f},   // 2s  
+    {2, 1, 1, 2, -3.4f, 2.116f},   // 2p1/2
+    {2, 1, 3, 4, -3.4f, 2.116f},   // 2p3/2
+    {3, 0, 1, 2, -1.51f, 4.761f},  // 3s
+    {3, 1, 1, 2, -1.51f, 4.761f},  // 3p1/2
+    {3, 1, 3, 4, -1.51f, 4.761f}   // 3p3/2
+};
+
 // Function declarations
 Vec3 calculateElectronPosition(int electron_id, float time);
 void calculateSystemStatistics();
@@ -141,6 +247,47 @@ void drawScientificHUD();
 void changeElementType(int element_index);
 float calculatePhotonWavelength(float energy);
 void drawWaveFunction(int electron_id);
+void updatePerformanceStats(Uint32 current_time);
+void drawPerformanceOverlay();
+void drawHelpOverlay();
+void drawElementTooltip(int element_index, int mouse_x, int mouse_y);
+float estimateMemoryUsage();
+void handleErrorGracefully(const char* operation, const char* error_msg);
+Vec3 screenToWorld(int screen_x, int screen_y, float camera_angle, float camera_distance);
+int findMoleculeAtPosition(Vec3 world_pos);
+void updateMolecularBonds();
+void drawChemicalBonds();
+void handleMouseDragging(SDL_Event* ev, float camera_angle, float camera_distance);
+void updateElectronMoleculeBinding();
+void checkElectronStealing();
+void drawOrbitalPaths();
+void updateElectronSpeedFromTemperature();
+
+// New enhanced feature functions
+void initializeExplosionSystem();
+void createExplosion(Vec3 position, int explosion_type, Vec3 color);
+void updateExplosions(float dt);
+void drawExplosions();
+void drawBloomEffect();
+void drawVolumetricLighting();
+
+void initializePhysicsExtensions();
+void calculateGravitationalForces();
+void calculateEnhancedVdWForces();
+void updateMagneticDipoles();
+void drawGravityField();
+void drawVdWPotential();
+
+void initializeMoleculeFormation();
+void checkMoleculeFormation();
+void updateFormedMolecules();
+void drawFormedMolecules();
+void breakMolecules();
+Vec3 calculateOptimalGeometry(int molecule_type, int atom_index);
+
+void applyShaderEffects();
+void enableDepthBlending();
+void drawParticleGlow(Vec3 position, Vec3 color, float intensity);
 
 // Initialize molecular system with interactions
 void initializeMolecularSystem() {
@@ -222,6 +369,18 @@ void initializeMolecularSystem() {
     
     // Initialize collision tracking
     collision_count = 0;
+    
+    // Initialize new enhanced systems
+    initializeExplosionSystem();
+    initializePhysicsExtensions();
+    initializeMoleculeFormation();
+    
+    // Initialize chemical bonds matrix
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        for(int j = 0; j < NUM_MOLECULES; j++) {
+            chemical_bonds[i][j] = 0.0f;
+        }
+    }
 }
 
 // Perfect 3D sphere rendering with smooth surface
@@ -329,6 +488,10 @@ void checkQuantumTunneling(int electron_id) {
             Vec3 current_pos = calculateElectronPosition(electron_id, 0);
             emitPhoton(current_pos, electrons[electron_id].color, 0.5f);
             
+            // Create quantum tunneling explosion effect
+            Vec3 tunnel_color = {0.9f, 0.5f, 1.0f}; // Purple/magenta for quantum events
+            createExplosion(current_pos, 1, tunnel_color);
+            
             // Change molecule
             electrons[electron_id].molecule_id = target_mol;
             electrons[electron_id].radius = 2.0f + ((float)rand()/RAND_MAX) * 2.0f;
@@ -369,6 +532,10 @@ void checkElectronCollisions() {
                 
                 // Emit collision photon
                 emitPhoton(pos1, (Vec3){1.0f, 1.0f, 0.5f}, 0.3f);
+                
+                // Create collision explosion effect
+                Vec3 collision_color = {1.0f, 0.6f, 0.2f}; // Orange for collisions
+                createExplosion(pos1, 0, collision_color);
             }
         }
     }
@@ -831,6 +998,270 @@ void drawScientificHUD() {
     glMatrixMode(GL_MODELVIEW);
 }
 
+// Update performance statistics
+void updatePerformanceStats(Uint32 current_time) {
+    frame_count++;
+    
+    // Calculate FPS every second
+    if(current_time - fps_timer >= 1000) {
+        fps = (float)frame_count * 1000.0f / (current_time - fps_timer);
+        frame_count = 0;
+        fps_timer = current_time;
+        
+        // Estimate memory usage
+        memory_usage_mb = estimateMemoryUsage();
+    }
+    
+    static Uint32 last_frame_time = 0;
+    frame_time_ms = (float)(current_time - last_frame_time);
+    last_frame_time = current_time;
+}
+
+// Estimate memory usage (simplified)
+float estimateMemoryUsage() {
+    float base_memory = sizeof(electronTrail) + sizeof(electrons) + sizeof(molecules) + sizeof(photons);
+    float dynamic_memory = collision_count * sizeof(CollisionEvent);
+    return (base_memory + dynamic_memory) / (1024.0f * 1024.0f); // Convert to MB
+}
+
+// Error handling function
+void handleErrorGracefully(const char* operation, const char* error_msg) {
+    printf("ERROR in %s: %s\n", operation, error_msg);
+    // Log to file in real implementation
+    // fprintf(error_log, "[%.2f] %s: %s\n", global_time, operation, error_msg);
+}
+
+// Draw performance overlay
+void drawPerformanceOverlay() {
+    if(!show_performance_overlay) return;
+    
+    // Save current matrices
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0, 1200, 900, 0, -1, 1);
+    
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    // Performance panel (top-right)
+    glColor4f(0.1f, 0.1f, 0.1f, 0.8f);
+    glBegin(GL_QUADS);
+    glVertex2f(850, 10);
+    glVertex2f(1190, 10);
+    glVertex2f(1190, 150);
+    glVertex2f(850, 150);
+    glEnd();
+    
+    // FPS indicator
+    float fps_ratio = fminf(fps / 60.0f, 1.0f);
+    Vec3 fps_color = {1.0f - fps_ratio, fps_ratio, 0.0f}; // Red to green
+    glColor4f(fps_color.x, fps_color.y, fps_color.z, 0.9f);
+    glBegin(GL_QUADS);
+    glVertex2f(870, 30);
+    glVertex2f(870 + fps_ratio * 100, 30);
+    glVertex2f(870 + fps_ratio * 100, 45);
+    glVertex2f(870, 45);
+    glEnd();
+    
+    // Memory usage bar
+    float mem_ratio = fminf(memory_usage_mb / 100.0f, 1.0f); // Assume 100MB max
+    glColor4f(0.3f, 0.7f, 1.0f, 0.8f);
+    glBegin(GL_QUADS);
+    glVertex2f(870, 60);
+    glVertex2f(870 + mem_ratio * 100, 60);
+    glVertex2f(870 + mem_ratio * 100, 75);
+    glVertex2f(870, 75);
+    glEnd();
+    
+    // Frame time indicator
+    float frame_ratio = fminf(frame_time_ms / 32.0f, 1.0f); // 32ms = ~30fps
+    glColor4f(1.0f, 0.5f, 0.2f, 0.8f);
+    glBegin(GL_QUADS);
+    glVertex2f(870, 90);
+    glVertex2f(870 + frame_ratio * 100, 90);
+    glVertex2f(870 + frame_ratio * 100, 105);
+    glVertex2f(870, 105);
+    glEnd();
+    
+    // Labels (simplified - in real version use font rendering)
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    // Would draw text here: "FPS: %.1f", "MEM: %.1fMB", "Frame: %.1fms"
+    
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+    glDisable(GL_BLEND);
+    
+    // Restore matrices
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
+// Draw help overlay (F1)
+void drawHelpOverlay() {
+    if(!show_help_overlay) return;
+    
+    // Save current matrices
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0, 1200, 900, 0, -1, 1);
+    
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    // Semi-transparent fullscreen overlay
+    glColor4f(0.0f, 0.0f, 0.0f, 0.7f);
+    glBegin(GL_QUADS);
+    glVertex2f(0, 0);
+    glVertex2f(1200, 0);
+    glVertex2f(1200, 900);
+    glVertex2f(0, 900);
+    glEnd();
+    
+    // Help panel
+    glColor4f(0.1f, 0.2f, 0.3f, 0.9f);
+    glBegin(GL_QUADS);
+    glVertex2f(200, 100);
+    glVertex2f(1000, 100);
+    glVertex2f(1000, 800);
+    glVertex2f(200, 800);
+    glEnd();
+    
+    // Border
+    glColor4f(0.4f, 0.7f, 1.0f, 1.0f);
+    glLineWidth(3.0f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(200, 100);
+    glVertex2f(1000, 100);
+    glVertex2f(1000, 800);
+    glVertex2f(200, 800);
+    glEnd();
+    
+    // Content areas for different help sections
+    glColor4f(0.8f, 0.9f, 1.0f, 0.8f);
+    
+    // Keyboard shortcuts section
+    for(int i = 0; i < 8; i++) {
+        glBegin(GL_QUADS);
+        glVertex2f(220, 140 + i * 60);
+        glVertex2f(480, 140 + i * 60);
+        glVertex2f(480, 180 + i * 60);
+        glVertex2f(220, 180 + i * 60);
+        glEnd();
+    }
+    
+    // Element info section
+    glColor4f(0.9f, 0.8f, 1.0f, 0.8f);
+    for(int i = 0; i < 6; i++) {
+        glBegin(GL_QUADS);
+        glVertex2f(520, 140 + i * 80);
+        glVertex2f(980, 140 + i * 80);
+        glVertex2f(980, 200 + i * 80);
+        glVertex2f(520, 200 + i * 80);
+        glEnd();
+    }
+    
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+    glDisable(GL_BLEND);
+    
+    // Restore matrices
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
+// Draw element tooltip on hover
+void drawElementTooltip(int element_index, int mouse_x, int mouse_y) {
+    if(element_index < 0 || element_index >= 6) return;
+    
+    Element* elem = &elements[element_index];
+    
+    // Save current matrices
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0, 1200, 900, 0, -1, 1);
+    
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    // Tooltip background
+    float tooltip_x = (float)mouse_x + 20;
+    float tooltip_y = (float)mouse_y - 10;
+    
+    glColor4f(0.2f, 0.2f, 0.4f, 0.9f);
+    glBegin(GL_QUADS);
+    glVertex2f(tooltip_x, tooltip_y);
+    glVertex2f(tooltip_x + 200, tooltip_y);
+    glVertex2f(tooltip_x + 200, tooltip_y + 120);
+    glVertex2f(tooltip_x, tooltip_y + 120);
+    glEnd();
+    
+    // Element color indicator
+    glColor4f(elem->color_r, elem->color_g, elem->color_b, 0.8f);
+    glBegin(GL_QUADS);
+    glVertex2f(tooltip_x + 10, tooltip_y + 10);
+    glVertex2f(tooltip_x + 40, tooltip_y + 10);
+    glVertex2f(tooltip_x + 40, tooltip_y + 40);
+    glVertex2f(tooltip_x + 10, tooltip_y + 40);
+    glEnd();
+    
+    // Information bars (atomic number, mass, electronegativity)
+    glColor4f(0.7f, 0.9f, 0.7f, 0.8f);
+    float atomic_ratio = (float)elem->atomic_number / 20.0f;
+    glBegin(GL_QUADS);
+    glVertex2f(tooltip_x + 50, tooltip_y + 20);
+    glVertex2f(tooltip_x + 50 + atomic_ratio * 100, tooltip_y + 20);
+    glVertex2f(tooltip_x + 50 + atomic_ratio * 100, tooltip_y + 30);
+    glVertex2f(tooltip_x + 50, tooltip_y + 30);
+    glEnd();
+    
+    glColor4f(0.9f, 0.7f, 0.7f, 0.8f);
+    float mass_ratio = elem->atomic_mass / 25.0f;
+    glBegin(GL_QUADS);
+    glVertex2f(tooltip_x + 50, tooltip_y + 40);
+    glVertex2f(tooltip_x + 50 + mass_ratio * 100, tooltip_y + 40);
+    glVertex2f(tooltip_x + 50 + mass_ratio * 100, tooltip_y + 50);
+    glVertex2f(tooltip_x + 50, tooltip_y + 50);
+    glEnd();
+    
+    // In real implementation, would render text here showing:
+    // elem->name, elem->symbol, elem->atomic_number, elem->atomic_mass, elem->electronegativity
+    
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+    glDisable(GL_BLEND);
+    
+    // Restore matrices
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
 int main(int argc, char** argv) {
     if(SDL_Init(SDL_INIT_VIDEO)!=0){fprintf(stderr,"SDL_Init error: %s\n",SDL_GetError());return 1;}
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,2);
@@ -903,18 +1334,39 @@ int main(int argc, char** argv) {
     printf("F - Toggle EM field lines | M - Toggle magnetic field\n");
     printf("E - Add energy (heat) | C - Cool down\n");
     printf("1-6 - Change elements (H,C,N,O,F,Ne)\n");
-    printf("H - Toggle scientific HUD\n");
-    printf("S - Save simulation state\n");
+    printf("H - Toggle scientific HUD | P - Toggle performance overlay\n");
+    printf("F1 - Help overlay | S - Save simulation state\n");
+    printf("🖱️  MOUSE CONTROLS:\n");
+    printf("Left Click + Drag - Grab and move NUCLEI (improved selection)\n");
+    printf("Electrons follow their nucleus with orbital paths!\n");
+    printf("Heat up molecules (E key) to speed up electrons!\n");
+    printf("Stronger nuclei can steal electrons from weaker ones!\n");
+    printf("Bring nuclei close together to form chemical bonds!\n");
     printf("\n🧪 Real-time Analysis:\n");
-    printf("- Quantum tunneling events with element tracking\n");
+    printf("- Interactive molecular dragging and bonding\n");
+    printf("- Chemical bond formation and visualization\n");
+    printf("- Distance-based molecular interactions\n");
+    printf("- Elliptical orbital paths (theory book style)\n");
+    printf("- Temperature-dependent electron speeds\n");
+    printf("- Optimized molecule selection (closest to click)\n");
+    printf("- Reduced quantum tunneling (more realistic)\n");
     printf("- Electron-electron scattering dynamics\n");
     printf("- Photon emission with wavelength calculation\n");
     printf("- Thermodynamic state monitoring\n");
-    printf("- Electromagnetic field interactions\n");
-    printf("- Periodic table element properties\n\n");
+    printf("- Performance profiling with FPS/Memory monitoring\n");
+    printf("🎨 Enhanced Visual Effects:\n");
+    printf("- Particle explosion system for collisions and events\n");
+    printf("- Advanced Van der Waals force visualization\n");
+    printf("- Gravitational field effects between molecules\n");
+    printf("- Bloom lighting and volumetric rays\n");
+    printf("- Real molecular formation (H2, OH, CO, etc.)\n");
+    printf("💫 NEW Controls: X=Explosions, G=Gravity, V=VdW, B=Bloom, N=Molecules\n\n");
 
     while(running) {
         while(SDL_PollEvent(&ev)) {
+            // Handle mouse dragging
+            handleMouseDragging(&ev, camera_angle, camera_distance);
+            
             if(ev.type == SDL_QUIT) running = 0;
             if(ev.type == SDL_KEYDOWN) {
                 switch(ev.key.keysym.sym) {
@@ -958,6 +1410,29 @@ int main(int argc, char** argv) {
                     case SDLK_4: changeElementType(3); break; // Oxygen
                     case SDLK_5: changeElementType(4); break; // Fluorine
                     case SDLK_6: changeElementType(5); break; // Neon
+                    case SDLK_p:
+                        show_performance_overlay = !show_performance_overlay;
+                        printf("Performance overlay: %s\n", show_performance_overlay ? "ON" : "OFF"); break;
+                    case SDLK_F1:
+                        show_help_overlay = !show_help_overlay;
+                        printf("Help overlay: %s\n", show_help_overlay ? "ON" : "OFF"); break;
+                    
+                    // New enhanced features controls
+                    case SDLK_x:
+                        show_explosions = !show_explosions;
+                        printf("💥 Explosion effects: %s\n", show_explosions ? "ON" : "OFF"); break;
+                    case SDLK_g:
+                        show_gravity_field = !show_gravity_field;
+                        printf("🌌 Gravity field: %s\n", show_gravity_field ? "ON" : "OFF"); break;
+                    case SDLK_v:
+                        show_vdw_potential = !show_vdw_potential;
+                        printf("⚛️  Van der Waals potential: %s\n", show_vdw_potential ? "ON" : "OFF"); break;
+                    case SDLK_b:
+                        bloom_effect_intensity = (bloom_effect_intensity > 0.1f) ? 0.0f : BLOOM_INTENSITY;
+                        printf("✨ Bloom effects: %s\n", (bloom_effect_intensity > 0.1f) ? "ON" : "OFF"); break;
+                    case SDLK_n:
+                        show_formed_molecules = !show_formed_molecules;
+                        printf("🧪 Formed molecules: %s\n", show_formed_molecules ? "ON" : "OFF"); break;
                 }
                 if(camera_distance < 5.0f) camera_distance = 5.0f;
                 if(camera_distance > 25.0f) camera_distance = 25.0f;
@@ -968,15 +1443,42 @@ int main(int argc, char** argv) {
                 // Add slight external force based on mouse position
                 external_energy = ((float)mouse_x / 600.0f - 1.0f) * 0.1f;
             }
+            // Mouse button events are now handled in handleMouseDragging function
+            // Remove this old mouse handling code to avoid conflicts
         }
 
+        // Performance monitoring
+        Uint32 current_time = SDL_GetTicks();
+        updatePerformanceStats(current_time);
+        
         float dt = 0.016f; // ~60 FPS timing
         global_time += dt;
         
         // Update molecular physics
         updateMolecularPhysics(dt);
         
-        // Check for quantum events
+        // Update chemical bonds
+        updateMolecularBonds();
+        
+        // Update electron-nucleus binding forces
+        updateElectronMoleculeBinding();
+        
+        // Update electron speeds based on temperature
+        updateElectronSpeedFromTemperature();
+        
+        // Enhanced physics calculations
+        calculateGravitationalForces();
+        calculateEnhancedVdWForces();
+        updateMagneticDipoles();
+        
+        // Molecular formation system
+        checkMoleculeFormation();
+        updateFormedMolecules();
+        
+        // Update explosion particles
+        updateExplosions(dt);
+        
+        // Check for quantum events (reduced frequency)
         for(int i = 0; i < TOTAL_ELECTRONS; i++) {
             checkQuantumTunneling(i);
         }
@@ -1006,11 +1508,30 @@ int main(int argc, char** argv) {
         // Draw electromagnetic field
         drawElectromagneticField();
 
+        // Draw enhanced physics visualizations
+        drawGravityField();
+        drawVdWPotential();
+        
         // Draw interaction lines between molecules
         drawMolecularInteractions();
         
+        // Draw chemical bonds
+        drawChemicalBonds();
+        
+        // Draw formed molecules
+        drawFormedMolecules();
+        
+        // Draw orbital paths (theory book style)
+        drawOrbitalPaths();
+        
+        // Draw volumetric lighting effects
+        drawVolumetricLighting();
+        
         // Update and draw photons
         updateAndDrawPhotons(dt);
+        
+        // Draw explosion particles
+        drawExplosions();
 
         // Render all molecules with vibrations
         for(int mol = 0; mol < NUM_MOLECULES; mol++) {
@@ -1049,8 +1570,25 @@ int main(int argc, char** argv) {
             }
         }
         
+        // Draw bloom effect (after all bright objects)
+        drawBloomEffect();
+        
         // Draw scientific HUD
         drawScientificHUD();
+        
+        // Draw performance overlay
+        drawPerformanceOverlay();
+        
+        // Draw help overlay (if active)
+        drawHelpOverlay();
+        
+        // Draw element tooltip on hover (check if mouse is over element indicators)
+        if(mouse_x >= 150 && mouse_x <= 270 && mouse_y >= 40 && mouse_y <= 60) {
+            int hovered_element = (mouse_x - 150) / 30;
+            if(hovered_element >= 0 && hovered_element < NUM_MOLECULES) {
+                drawElementTooltip(molecules[hovered_element].element - elements, mouse_x, mouse_y);
+            }
+        }
 
         SDL_GL_SwapWindow(win);
         SDL_Delay(16);
@@ -1060,4 +1598,932 @@ int main(int argc, char** argv) {
     SDL_DestroyWindow(win);
     SDL_Quit();
     return 0;
+}
+
+// Convert screen coordinates to 3D world coordinates (improved)
+Vec3 screenToWorld(int screen_x, int screen_y, float camera_angle, float camera_distance) {
+    // Get actual window size for proper conversion
+    int window_width = 1200;
+    int window_height = 900;
+    
+    // Normalize screen coordinates to [-1, 1] range
+    float normalized_x = ((float)screen_x / (window_width * 0.5f)) - 1.0f;
+    float normalized_y = 1.0f - ((float)screen_y / (window_height * 0.5f));
+    
+    // Project to world space - molecules are spread over ~16 units, so scale accordingly
+    Vec3 world_pos;
+    world_pos.x = normalized_x * camera_distance * 0.8f; // Increased scaling to match molecule positions
+    world_pos.y = normalized_y * camera_distance * 0.8f;
+    world_pos.z = 0.0f; // Keep on camera plane
+    
+    // Apply camera rotation around Y axis
+    float cos_angle = cosf(camera_angle);
+    float sin_angle = sinf(camera_angle);
+    Vec3 rotated;
+    rotated.x = world_pos.x * cos_angle - world_pos.z * sin_angle;
+    rotated.y = world_pos.y;
+    rotated.z = world_pos.x * sin_angle + world_pos.z * cos_angle;
+    
+    // Debug output removed for better performance
+    
+    return rotated;
+}
+
+// Find which molecule is closest to a given world position
+int findMoleculeAtPosition(Vec3 world_pos) {
+    float min_distance = INFINITY;
+    int closest_molecule = -1;
+    
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        Vec3 mol_pos = molecules[i].position;
+        // Include vibration offset for accurate detection
+        mol_pos.x += molecules[i].vibration_offset.x;
+        mol_pos.y += molecules[i].vibration_offset.y;
+        mol_pos.z += molecules[i].vibration_offset.z;
+        
+        float distance = calculateDistance(world_pos, mol_pos);
+        
+        if(distance < min_distance) {
+            min_distance = distance;
+            closest_molecule = i;
+        }
+    }
+    
+    // Accept the closest molecule if it's within reasonable range
+    if(closest_molecule != -1 && min_distance < 15.0f) {
+        printf("Selected closest molecule: %s (distance: %.1f)\n", 
+               molecules[closest_molecule].element->symbol, min_distance);
+        return closest_molecule;
+    }
+    
+    return -1;
+}
+
+// Update chemical bonds based on distance
+void updateMolecularBonds() {
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        for(int j = i + 1; j < NUM_MOLECULES; j++) {
+            float distance = calculateDistance(molecules[i].position, molecules[j].position);
+            
+            if(distance < BONDING_DISTANCE) {
+                // Form chemical bond
+                float bond_strength = (BONDING_DISTANCE - distance) / BONDING_DISTANCE;
+                
+                // Only print if bond is newly formed
+                if(chemical_bonds[i][j] < 0.1f && bond_strength > 0.5f) {
+                    printf("Chemical bond formed between %s and %s! (strength: %.2f)\n",
+                           molecules[i].element->symbol, molecules[j].element->symbol, bond_strength);
+                }
+                
+                chemical_bonds[i][j] = bond_strength;
+                chemical_bonds[j][i] = bond_strength;
+                
+                // Apply bonding forces (attraction)
+                Vec3 direction = {
+                    (molecules[j].position.x - molecules[i].position.x) / distance,
+                    (molecules[j].position.y - molecules[i].position.y) / distance,
+                    (molecules[j].position.z - molecules[i].position.z) / distance
+                };
+                
+                float bond_force = bond_strength * 0.5f;
+                molecules[i].force.x += direction.x * bond_force;
+                molecules[i].force.y += direction.y * bond_force;
+                molecules[i].force.z += direction.z * bond_force;
+                
+                molecules[j].force.x -= direction.x * bond_force;
+                molecules[j].force.y -= direction.y * bond_force;
+                molecules[j].force.z -= direction.z * bond_force;
+                
+            } else if(distance < STRONG_INTERACTION_DISTANCE) {
+                // Strong interaction (no bond yet)
+                float interaction_strength = (STRONG_INTERACTION_DISTANCE - distance) / STRONG_INTERACTION_DISTANCE * 0.2f;
+                chemical_bonds[i][j] = interaction_strength;
+                chemical_bonds[j][i] = interaction_strength;
+            } else {
+                // No interaction
+                chemical_bonds[i][j] = 0.0f;
+                chemical_bonds[j][i] = 0.0f;
+            }
+        }
+    }
+}
+
+// Draw chemical bonds
+void drawChemicalBonds() {
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glLineWidth(4.0f);
+    
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        for(int j = i + 1; j < NUM_MOLECULES; j++) {
+            float bond_strength = chemical_bonds[i][j];
+            if(bond_strength > 0.1f) {
+                Vec3 pos1 = molecules[i].position;
+                Vec3 pos2 = molecules[j].position;
+                
+                // Bond color based on strength and elements
+                float r = 0.9f;
+                float g = 0.9f - bond_strength * 0.5f;
+                float b = 0.2f + bond_strength * 0.8f;
+                
+                glColor4f(r, g, b, bond_strength);
+                
+                glBegin(GL_LINES);
+                glVertex3f(pos1.x, pos1.y, pos1.z);
+                glVertex3f(pos2.x, pos2.y, pos2.z);
+                glEnd();
+                
+                // Draw bond strength indicator (thicker line)
+                if(bond_strength > 0.5f) {
+                    glLineWidth(8.0f);
+                    glColor4f(1.0f, 1.0f, 1.0f, bond_strength * 0.8f);
+                    glBegin(GL_LINES);
+                    glVertex3f(pos1.x, pos1.y, pos1.z);
+                    glVertex3f(pos2.x, pos2.y, pos2.z);
+                    glEnd();
+                    glLineWidth(4.0f);
+                }
+            }
+        }
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// Handle mouse dragging for molecules (nuclei)
+void handleMouseDragging(SDL_Event* ev, float camera_angle, float camera_distance) {
+    if(ev->type == SDL_MOUSEBUTTONDOWN && ev->button.button == SDL_BUTTON_LEFT) {
+        // Clean mouse handling
+        Vec3 world_pos = screenToWorld(ev->button.x, ev->button.y, camera_angle, camera_distance);
+        dragging_molecule = findMoleculeAtPosition(world_pos);
+        
+        if(dragging_molecule != -1) {
+            drag_offset.x = molecules[dragging_molecule].position.x - world_pos.x;
+            drag_offset.y = molecules[dragging_molecule].position.y - world_pos.y;
+            drag_offset.z = molecules[dragging_molecule].position.z - world_pos.z;
+            mouse_button_down = 1;
+            printf("SUCCESS! Grabbed nucleus: %s (Z=%d) - electrons will follow!\n", 
+                   molecules[dragging_molecule].element->name, 
+                   molecules[dragging_molecule].element->atomic_number);
+        } else {
+            printf("FAILED to grab any molecule\n");
+        }
+    }
+    
+    if(ev->type == SDL_MOUSEBUTTONUP && ev->button.button == SDL_BUTTON_LEFT) {
+        if(dragging_molecule != -1) {
+            printf("Released nucleus: %s - checking for electron stealing...\n", 
+                   molecules[dragging_molecule].element->name);
+            
+            // Check if any electrons should be stolen by nearby nuclei
+            checkElectronStealing();
+        }
+        dragging_molecule = -1;
+        mouse_button_down = 0;
+    }
+    
+    if(ev->type == SDL_MOUSEMOTION && dragging_molecule != -1 && mouse_button_down) {
+        Vec3 old_pos = molecules[dragging_molecule].position;
+        Vec3 world_pos = screenToWorld(ev->motion.x, ev->motion.y, camera_angle, camera_distance);
+        
+        Vec3 new_pos = {
+            world_pos.x + drag_offset.x,
+            world_pos.y + drag_offset.y,
+            world_pos.z + drag_offset.z
+        };
+        
+        // Calculate movement delta
+        Vec3 movement_delta = {
+            new_pos.x - old_pos.x,
+            new_pos.y - old_pos.y,
+            new_pos.z - old_pos.z
+        };
+        
+        // Update molecule position
+        molecules[dragging_molecule].position = new_pos;
+        
+        // Reset velocity when dragging
+        molecules[dragging_molecule].velocity.x *= 0.5f;
+        molecules[dragging_molecule].velocity.y *= 0.5f;
+        molecules[dragging_molecule].velocity.z *= 0.5f;
+        
+        // Move electrons that belong to this nucleus
+        for(int i = 0; i < TOTAL_ELECTRONS; i++) {
+            if(electrons[i].molecule_id == dragging_molecule) {
+                // Apply a fraction of the movement to electron orbital centers
+                // This creates a "dragging" effect while maintaining orbital motion
+                Vec3 current_pos = calculateElectronPosition(i, 0);
+                
+                // The electron tries to follow the nucleus but with some lag/elasticity
+                float follow_strength = 0.7f; // 70% follow rate
+                
+                // Update the electron's effective center by nudging its angles
+                electrons[i].angle_x += movement_delta.x * follow_strength * 0.1f;
+                electrons[i].angle_y += movement_delta.y * follow_strength * 0.1f;
+                electrons[i].angle_z += movement_delta.z * follow_strength * 0.1f;
+            }
+        }
+    }
+}
+
+// Update electron-molecule binding forces
+void updateElectronMoleculeBinding() {
+    for(int i = 0; i < TOTAL_ELECTRONS; i++) {
+        int current_mol = electrons[i].molecule_id;
+        Vec3 electron_pos = calculateElectronPosition(i, 0);
+        Vec3 nucleus_pos = molecules[current_mol].position;
+        
+        // Calculate distance from electron to its nucleus
+        float distance_to_nucleus = calculateDistance(electron_pos, nucleus_pos);
+        
+        // If electron is too far from its nucleus, apply strong attractive force
+        if(distance_to_nucleus > electrons[i].radius * 1.5f) {
+            // Strong binding force to keep electron in orbit
+            Vec3 binding_direction = {
+                (nucleus_pos.x - electron_pos.x) / distance_to_nucleus,
+                (nucleus_pos.y - electron_pos.y) / distance_to_nucleus,
+                (nucleus_pos.z - electron_pos.z) / distance_to_nucleus
+            };
+            
+            float binding_strength = molecules[current_mol].element->atomic_number * 0.1f;
+            
+            // Apply binding force by adjusting electron's orbital parameters
+            electrons[i].angle_x += binding_direction.x * binding_strength * 0.01f;
+            electrons[i].angle_y += binding_direction.y * binding_strength * 0.01f;
+            electrons[i].angle_z += binding_direction.z * binding_strength * 0.01f;
+        }
+    }
+}
+
+// Check if electrons should be stolen by stronger nuclei
+void checkElectronStealing() {
+    for(int i = 0; i < TOTAL_ELECTRONS; i++) {
+        int current_mol = electrons[i].molecule_id;
+        Vec3 electron_pos = calculateElectronPosition(i, 0);
+        
+        // Check all other molecules to see if they can steal this electron
+        for(int j = 0; j < NUM_MOLECULES; j++) {
+            if(j != current_mol) {
+                Vec3 other_nucleus = molecules[j].position;
+                float distance_to_other = calculateDistance(electron_pos, other_nucleus);
+                float distance_to_current = calculateDistance(electron_pos, molecules[current_mol].position);
+                
+                // Stealing conditions:
+                // 1. Other nucleus is closer
+                // 2. Other nucleus has higher atomic number (more protons)
+                // 3. Distance is within reasonable range
+                if(distance_to_other < distance_to_current * 0.7f && 
+                   molecules[j].element->atomic_number > molecules[current_mol].element->atomic_number &&
+                   distance_to_other < 4.0f) {
+                    
+                    // Steal the electron!
+                    electrons[i].molecule_id = j;
+                    electrons[i].radius = 2.0f + ((float)rand()/RAND_MAX) * 2.0f;
+                    
+                    printf("Electron stolen! %s (Z=%d) stole electron from %s (Z=%d)\n",
+                           molecules[j].element->symbol, molecules[j].element->atomic_number,
+                           molecules[current_mol].element->symbol, molecules[current_mol].element->atomic_number);
+                    
+                    // Emit photon for the stealing event
+                    emitPhoton(electron_pos, electrons[i].color, 0.8f);
+                    total_photons_emitted++;
+                    
+                    break; // Only steal once per frame
+                }
+            }
+        }
+    }
+}
+
+// Draw orbital paths as elliptical lines
+void drawOrbitalPaths() {
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glLineWidth(1.0f);
+    
+    for(int mol = 0; mol < NUM_MOLECULES; mol++) {
+        Vec3 nucleus_pos = molecules[mol].position;
+        
+        // Draw different orbital shapes for each electron shell
+        for(int e = 0; e < NUM_ELECTRONS_PER_MOLECULE; e++) {
+            int electron_id = mol * NUM_ELECTRONS_PER_MOLECULE + e;
+            Electron* electron = &electrons[electron_id];
+            
+            // Orbital color with transparency
+            glColor4f(electron->color.x, electron->color.y, electron->color.z, 0.3f);
+            
+            glBegin(GL_LINE_LOOP);
+            
+            // Draw elliptical orbital path
+            for(int i = 0; i < 64; i++) {
+                float angle = (2.0f * M_PI * i) / 64.0f;
+                
+                Vec3 orbital_point;
+                
+                if(e == 0) {
+                    // Inner orbital - circular
+                    orbital_point.x = nucleus_pos.x + electron->radius * cosf(angle);
+                    orbital_point.y = nucleus_pos.y + electron->radius * sinf(angle) * 0.6f;
+                    orbital_point.z = nucleus_pos.z;
+                } else if(e == 1) {
+                    // Middle orbital - figure-8 pattern
+                    orbital_point.x = nucleus_pos.x + electron->radius * cosf(angle) * cosf(angle * 0.5f);
+                    orbital_point.y = nucleus_pos.y + electron->radius * sinf(angle) * 0.8f;
+                    orbital_point.z = nucleus_pos.z + electron->radius * sinf(angle) * sinf(angle * 0.3f);
+                } else {
+                    // Outer orbital - complex 3D ellipse
+                    orbital_point.x = nucleus_pos.x + electron->radius * cosf(angle) * sinf(angle * 0.7f);
+                    orbital_point.y = nucleus_pos.y + electron->radius * sinf(angle) * cosf(angle * 0.4f);
+                    orbital_point.z = nucleus_pos.z + electron->radius * sinf(angle) * cosf(angle * 0.6f);
+                }
+                
+                glVertex3f(orbital_point.x, orbital_point.y, orbital_point.z);
+            }
+            
+            glEnd();
+        }
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// Update electron speed based on temperature
+void updateElectronSpeedFromTemperature() {
+    for(int i = 0; i < TOTAL_ELECTRONS; i++) {
+        int mol_id = electrons[i].molecule_id;
+        float temperature = molecules[mol_id].temperature;
+        
+        // Base speed + temperature effect
+        float base_speed = 0.6f + ((float)rand()/RAND_MAX) * 0.8f;
+        float temp_multiplier = temperature / 300.0f; // 300K as reference
+        
+        // Speed increases with temperature (kinetic theory)
+        electrons[i].speed = base_speed * (0.5f + temp_multiplier * 1.5f);
+        
+        // Clamp speed to reasonable values
+        if(electrons[i].speed > 3.0f) electrons[i].speed = 3.0f;
+        if(electrons[i].speed < 0.2f) electrons[i].speed = 0.2f;
+    }
+}
+
+// ================================
+// EXPLOSION PARTICLE SYSTEM
+// ================================
+
+void initializeExplosionSystem() {
+    for(int i = 0; i < MAX_EXPLOSION_PARTICLES; i++) {
+        explosion_particles[i].active = 0;
+        explosion_particles[i].lifetime = 0.0f;
+        explosion_particles[i].max_lifetime = EXPLOSION_LIFETIME;
+    }
+}
+
+void createExplosion(Vec3 position, int explosion_type, Vec3 color) {
+    int particles_to_create = 15 + rand() % 20; // 15-35 particles
+    
+    for(int i = 0; i < particles_to_create; i++) {
+        // Find inactive particle
+        for(int j = 0; j < MAX_EXPLOSION_PARTICLES; j++) {
+            if(!explosion_particles[j].active) {
+                explosion_particles[j].position = position;
+                explosion_particles[j].active = 1;
+                explosion_particles[j].lifetime = 0.0f;
+                explosion_particles[j].explosion_type = explosion_type;
+                explosion_particles[j].color = color;
+                
+                // Random velocity based on explosion type
+                float speed = 2.0f + ((float)rand()/RAND_MAX) * 3.0f;
+                float theta = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+                float phi = ((float)rand()/RAND_MAX) * M_PI;
+                
+                explosion_particles[j].velocity.x = speed * sinf(phi) * cosf(theta);
+                explosion_particles[j].velocity.y = speed * sinf(phi) * sinf(theta);
+                explosion_particles[j].velocity.z = speed * cosf(phi);
+                
+                // Size based on explosion type
+                if(explosion_type == 0) { // Collision
+                    explosion_particles[j].size = 0.1f + ((float)rand()/RAND_MAX) * 0.2f;
+                } else if(explosion_type == 1) { // Tunneling
+                    explosion_particles[j].size = 0.05f + ((float)rand()/RAND_MAX) * 0.1f;
+                    explosion_particles[j].color.x += 0.3f; // Brighter
+                } else { // Bonding
+                    explosion_particles[j].size = 0.15f + ((float)rand()/RAND_MAX) * 0.25f;
+                    explosion_particles[j].color.y += 0.4f; // More green
+                }
+                
+                explosion_particles[j].max_lifetime = EXPLOSION_LIFETIME + ((float)rand()/RAND_MAX) * 1.0f;
+                break;
+            }
+        }
+    }
+}
+
+void updateExplosions(float dt) {
+    for(int i = 0; i < MAX_EXPLOSION_PARTICLES; i++) {
+        if(explosion_particles[i].active) {
+            explosion_particles[i].lifetime += dt;
+            
+            // Update position
+            explosion_particles[i].position.x += explosion_particles[i].velocity.x * dt;
+            explosion_particles[i].position.y += explosion_particles[i].velocity.y * dt;
+            explosion_particles[i].position.z += explosion_particles[i].velocity.z * dt;
+            
+            // Apply gravity and drag
+            explosion_particles[i].velocity.y -= 1.0f * dt; // Gravity
+            explosion_particles[i].velocity.x *= 0.98f; // Drag
+            explosion_particles[i].velocity.y *= 0.98f;
+            explosion_particles[i].velocity.z *= 0.98f;
+            
+            // Fade out over time
+            if(explosion_particles[i].lifetime >= explosion_particles[i].max_lifetime) {
+                explosion_particles[i].active = 0;
+            }
+        }
+    }
+}
+
+void drawExplosions() {
+    if(!show_explosions) return;
+    
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE); // Additive blending for bright particles
+    
+    for(int i = 0; i < MAX_EXPLOSION_PARTICLES; i++) {
+        if(explosion_particles[i].active) {
+            float life_ratio = explosion_particles[i].lifetime / explosion_particles[i].max_lifetime;
+            float alpha = 1.0f - life_ratio; // Fade out
+            
+            glPushMatrix();
+            glTranslatef(explosion_particles[i].position.x, 
+                        explosion_particles[i].position.y, 
+                        explosion_particles[i].position.z);
+            
+            glColor4f(explosion_particles[i].color.x, 
+                     explosion_particles[i].color.y, 
+                     explosion_particles[i].color.z, 
+                     alpha);
+            
+            // Draw glowing particle
+            drawParticleGlow(explosion_particles[i].position, explosion_particles[i].color, alpha);
+            
+            glPopMatrix();
+        }
+    }
+    
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// ================================
+// VISUAL ENHANCEMENTS
+// ================================
+
+void drawBloomEffect() {
+    if(bloom_effect_intensity <= 0.0f) return;
+    
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    
+    // Draw enhanced glow around bright objects
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        Vec3 pos = molecules[i].position;
+        Vec3 color = {molecules[i].element->color_r, molecules[i].element->color_g, molecules[i].element->color_b};
+        
+        // Multiple layers of glow for bloom effect
+        for(int layer = 0; layer < 3; layer++) {
+            float radius = NUCLEUS_RADIUS * (2.0f + layer * 1.5f);
+            float alpha = bloom_effect_intensity * (0.3f - layer * 0.1f);
+            
+            glPushMatrix();
+            glTranslatef(pos.x, pos.y, pos.z);
+            glColor4f(color.x, color.y, color.z, alpha);
+            
+            GLUquadric* quad = gluNewQuadric();
+            gluSphere(quad, radius, 12, 12);
+            gluDeleteQuadric(quad);
+            glPopMatrix();
+        }
+    }
+    
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+void drawVolumetricLighting() {
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    // Draw light rays from electron emissions
+    for(int i = 0; i < MAX_PHOTONS; i++) {
+        if(photons[i].active) {
+            glBegin(GL_LINES);
+            glColor4f(photons[i].color.x, photons[i].color.y, photons[i].color.z, 0.3f);
+            
+            Vec3 start = photons[i].position;
+            Vec3 end = {
+                start.x + photons[i].velocity.x * 2.0f,
+                start.y + photons[i].velocity.y * 2.0f,
+                start.z + photons[i].velocity.z * 2.0f
+            };
+            
+            glVertex3f(start.x, start.y, start.z);
+            glVertex3f(end.x, end.y, end.z);
+            glEnd();
+        }
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+void drawParticleGlow(Vec3 position, Vec3 color, float intensity) {
+    glPushMatrix();
+    glTranslatef(position.x, position.y, position.z);
+    
+    // Core particle
+    glColor4f(color.x, color.y, color.z, intensity);
+    GLUquadric* quad = gluNewQuadric();
+    gluSphere(quad, 0.05f, 8, 8);
+    
+    // Outer glow
+    glColor4f(color.x, color.y, color.z, intensity * 0.3f);
+    gluSphere(quad, 0.15f, 8, 8);
+    
+    gluDeleteQuadric(quad);
+    glPopMatrix();
+}
+
+// ================================
+// PHYSICS EXTENSIONS
+// ================================
+
+void initializePhysicsExtensions() {
+    // Initialize Van der Waals parameters for each element
+    for(int i = 0; i < 6; i++) {
+        vdw_params[i].epsilon = VDW_EPSILON * (1.0f + i * 0.1f); // Varies by element
+        vdw_params[i].sigma = VDW_SIGMA * (0.8f + i * 0.05f);
+        vdw_params[i].r_min = vdw_params[i].sigma * powf(2.0f, 1.0f/6.0f);
+    }
+    
+    // Initialize gravity sources (each molecule acts as gravity source)
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        gravity_sources[i].position = molecules[i].position;
+        gravity_sources[i].mass = molecules[i].element->atomic_mass;
+        gravity_sources[i].influence_radius = 10.0f;
+    }
+}
+
+void calculateGravitationalForces() {
+    if(!show_gravity_field) return;
+    
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        molecules[i].force.x = 0.0f;
+        molecules[i].force.y = 0.0f;
+        molecules[i].force.z = 0.0f;
+        
+        for(int j = 0; j < NUM_MOLECULES; j++) {
+            if(i != j) {
+                Vec3 r_vec = {
+                    molecules[j].position.x - molecules[i].position.x,
+                    molecules[j].position.y - molecules[i].position.y,
+                    molecules[j].position.z - molecules[i].position.z
+                };
+                
+                float r = sqrtf(r_vec.x*r_vec.x + r_vec.y*r_vec.y + r_vec.z*r_vec.z);
+                if(r > 0.1f) { // Avoid division by zero
+                    float force_magnitude = GRAVITATIONAL_CONSTANT * molecules[i].element->atomic_mass * 
+                                          molecules[j].element->atomic_mass / (r * r) * 1e20f; // Scale factor
+                    
+                    molecules[i].force.x += force_magnitude * r_vec.x / r;
+                    molecules[i].force.y += force_magnitude * r_vec.y / r;
+                    molecules[i].force.z += force_magnitude * r_vec.z / r;
+                }
+            }
+        }
+        
+        // Update gravity source positions
+        gravity_sources[i].position = molecules[i].position;
+    }
+}
+
+void calculateEnhancedVdWForces() {
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        for(int j = i + 1; j < NUM_MOLECULES; j++) {
+            Vec3 r_vec = {
+                molecules[j].position.x - molecules[i].position.x,
+                molecules[j].position.y - molecules[i].position.y,
+                molecules[j].position.z - molecules[i].position.z
+            };
+            
+            float r = sqrtf(r_vec.x*r_vec.x + r_vec.y*r_vec.y + r_vec.z*r_vec.z);
+            
+            if(r > 0.1f && r < 15.0f) { // Reasonable interaction range
+                // Use mixed parameters for different element pairs
+                int elem_i = current_element_index;
+                int elem_j = current_element_index;
+                if(elem_i >= 6) elem_i = 5;
+                if(elem_j >= 6) elem_j = 5;
+                
+                float epsilon = sqrtf(vdw_params[elem_i].epsilon * vdw_params[elem_j].epsilon);
+                float sigma = (vdw_params[elem_i].sigma + vdw_params[elem_j].sigma) * 0.5f;
+                
+                // Lennard-Jones potential: V(r) = 4ε[(σ/r)^12 - (σ/r)^6]
+                float sigma_over_r = sigma / r;
+                float sigma6 = powf(sigma_over_r, 6.0f);
+                float sigma12 = sigma6 * sigma6;
+                
+                float force_magnitude = 24.0f * epsilon * (2.0f * sigma12 - sigma6) / r;
+                
+                // Apply force to both molecules
+                molecules[i].force.x -= force_magnitude * r_vec.x / r;
+                molecules[i].force.y -= force_magnitude * r_vec.y / r;
+                molecules[i].force.z -= force_magnitude * r_vec.z / r;
+                
+                molecules[j].force.x += force_magnitude * r_vec.x / r;
+                molecules[j].force.y += force_magnitude * r_vec.y / r;
+                molecules[j].force.z += force_magnitude * r_vec.z / r;
+            }
+        }
+    }
+}
+
+void updateMagneticDipoles() {
+    // Simple magnetic dipole interactions
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        molecules[i].magnetic_moment = molecules[i].element->atomic_number * 0.1f * magnetic_field_strength;
+        
+        // Magnetic force affects electron orbital speeds
+        for(int e = i * NUM_ELECTRONS_PER_MOLECULE; e < (i + 1) * NUM_ELECTRONS_PER_MOLECULE; e++) {
+            electrons[e].speed *= (1.0f + molecules[i].magnetic_moment * 0.02f);
+        }
+    }
+}
+
+void drawGravityField() {
+    if(!show_gravity_field) return;
+    
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    // Draw gravity field lines
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        Vec3 center = gravity_sources[i].position;
+        
+        glColor4f(0.8f, 0.6f, 0.2f, 0.3f); // Golden field lines
+        
+        // Draw radial field lines
+        for(int angle = 0; angle < 360; angle += 30) {
+            float rad = angle * M_PI / 180.0f;
+            
+            glBegin(GL_LINE_STRIP);
+            for(int r = 1; r < 8; r++) {
+                float radius = r * 1.5f;
+                float field_strength = gravity_sources[i].mass / (radius * radius + 1.0f);
+                
+                glColor4f(0.8f, 0.6f, 0.2f, field_strength * 0.1f);
+                glVertex3f(center.x + radius * cosf(rad), 
+                          center.y + radius * sinf(rad), 
+                          center.z);
+            }
+            glEnd();
+        }
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+void drawVdWPotential() {
+    if(!show_vdw_potential) return;
+    
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    // Draw potential wells between close molecules
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        for(int j = i + 1; j < NUM_MOLECULES; j++) {
+            float distance = calculateDistance(molecules[i].position, molecules[j].position);
+            
+            if(distance < 8.0f) { // Only show for nearby molecules
+                Vec3 mid_point = {
+                    (molecules[i].position.x + molecules[j].position.x) * 0.5f,
+                    (molecules[i].position.y + molecules[j].position.y) * 0.5f,
+                    (molecules[i].position.z + molecules[j].position.z) * 0.5f
+                };
+                
+                // Color based on interaction strength
+                float interaction_strength = 1.0f / (distance + 1.0f);
+                glColor4f(0.2f, 0.8f, 0.9f, interaction_strength * 0.4f);
+                
+                glPushMatrix();
+                glTranslatef(mid_point.x, mid_point.y, mid_point.z);
+                GLUquadric* quad = gluNewQuadric();
+                gluSphere(quad, 0.3f * interaction_strength, 8, 8);
+                gluDeleteQuadric(quad);
+                glPopMatrix();
+            }
+        }
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// ================================
+// MOLECULAR FORMATION SYSTEM
+// ================================
+
+void initializeMoleculeFormation() {
+    for(int i = 0; i < MAX_FORMED_MOLECULES; i++) {
+        formed_molecules[i].active = 0;
+        formed_molecules[i].atom_count = 0;
+        formed_molecules[i].formation_energy = 0.0f;
+    }
+}
+
+void checkMoleculeFormation() {
+    // Check for simple molecule formations
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        for(int j = i + 1; j < NUM_MOLECULES; j++) {
+            float distance = calculateDistance(molecules[i].position, molecules[j].position);
+            
+            if(distance < BOND_FORMATION_DISTANCE) {
+                // Check if these atoms can form a known molecule
+                int elem_i = molecules[i].element->atomic_number;
+                int elem_j = molecules[j].element->atomic_number;
+                
+                // Find inactive formed molecule slot
+                for(int f = 0; f < MAX_FORMED_MOLECULES; f++) {
+                    if(!formed_molecules[f].active) {
+                        formed_molecules[f].active = 1;
+                        formed_molecules[f].atom_count = 2;
+                        formed_molecules[f].atom_types[0] = elem_i;
+                        formed_molecules[f].atom_types[1] = elem_j;
+                        
+                        // Calculate center of mass
+                        formed_molecules[f].positions[0] = molecules[i].position;
+                        formed_molecules[f].positions[1] = molecules[j].position;
+                        
+                        // Determine molecule type and properties
+                        if((elem_i == 1 && elem_j == 1)) { // H-H
+                            strcpy(formed_molecules[f].formula, "H2");
+                            formed_molecules[f].formation_energy = -436.0f; // kJ/mol
+                            formed_molecules[f].bond_lengths[0] = 0.74f; // Angstroms
+                        } else if((elem_i == 1 && elem_j == 8) || (elem_i == 8 && elem_j == 1)) { // H-O
+                            strcpy(formed_molecules[f].formula, "OH");
+                            formed_molecules[f].formation_energy = -463.0f;
+                            formed_molecules[f].bond_lengths[0] = 0.96f;
+                        } else if((elem_i == 6 && elem_j == 8) || (elem_i == 8 && elem_j == 6)) { // C-O
+                            strcpy(formed_molecules[f].formula, "CO");
+                            formed_molecules[f].formation_energy = -1072.0f;
+                            formed_molecules[f].bond_lengths[0] = 1.13f;
+                        } else {
+                            // Generic bond
+                            sprintf(formed_molecules[f].formula, "%c%c", 
+                                   molecules[i].element->symbol[0], 
+                                   molecules[j].element->symbol[0]);
+                            formed_molecules[f].formation_energy = -200.0f;
+                            formed_molecules[f].bond_lengths[0] = distance;
+                        }
+                        
+                        // Create bonding explosion effect
+                        Vec3 bond_center = {
+                            (molecules[i].position.x + molecules[j].position.x) * 0.5f,
+                            (molecules[i].position.y + molecules[j].position.y) * 0.5f,
+                            (molecules[i].position.z + molecules[j].position.z) * 0.5f
+                        };
+                        Vec3 bond_color = {0.2f, 0.8f, 0.3f}; // Green for bonding
+                        createExplosion(bond_center, 2, bond_color);
+                        
+                        printf("🧪 Molecule formed: %s (Energy: %.1f kJ/mol)\n", 
+                               formed_molecules[f].formula, formed_molecules[f].formation_energy);
+                        break;
+                    }
+                }
+                break; // Only one bond per atom for now
+            }
+        }
+    }
+}
+
+void updateFormedMolecules() {
+    for(int i = 0; i < MAX_FORMED_MOLECULES; i++) {
+        if(formed_molecules[i].active) {
+            // Check if atoms are still close enough to maintain bond
+            if(formed_molecules[i].atom_count >= 2) {
+                Vec3 pos1 = formed_molecules[i].positions[0];
+                Vec3 pos2 = formed_molecules[i].positions[1];
+                float distance = calculateDistance(pos1, pos2);
+                
+                if(distance > BOND_BREAK_DISTANCE) {
+                    printf("💥 Bond broken: %s (distance: %.2f)\n", 
+                           formed_molecules[i].formula, distance);
+                    formed_molecules[i].active = 0;
+                    
+                    // Create break explosion
+                    Vec3 break_center = {
+                        (pos1.x + pos2.x) * 0.5f,
+                        (pos1.y + pos2.y) * 0.5f,
+                        (pos1.z + pos2.z) * 0.5f
+                    };
+                    Vec3 break_color = {1.0f, 0.3f, 0.1f}; // Red for breaking
+                    createExplosion(break_center, 0, break_color);
+                }
+            }
+        }
+    }
+}
+
+void drawFormedMolecules() {
+    if(!show_formed_molecules) return;
+    
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    for(int i = 0; i < MAX_FORMED_MOLECULES; i++) {
+        if(formed_molecules[i].active && formed_molecules[i].atom_count >= 2) {
+            Vec3 pos1 = formed_molecules[i].positions[0];
+            Vec3 pos2 = formed_molecules[i].positions[1];
+            
+            // Draw thicker bond line
+            glLineWidth(3.0f);
+            glColor4f(0.9f, 0.9f, 0.2f, 0.8f); // Bright yellow bond
+            
+            glBegin(GL_LINES);
+            glVertex3f(pos1.x, pos1.y, pos1.z);
+            glVertex3f(pos2.x, pos2.y, pos2.z);
+            glEnd();
+            
+            glLineWidth(1.0f);
+            
+            // Draw molecule label
+            Vec3 center = {
+                (pos1.x + pos2.x) * 0.5f,
+                (pos1.y + pos2.y) * 0.5f + 0.5f,
+                (pos1.z + pos2.z) * 0.5f
+            };
+            
+            glColor4f(1.0f, 1.0f, 1.0f, 0.9f);
+            glRasterPos3f(center.x, center.y, center.z);
+            // Note: Text rendering would need additional setup
+        }
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+Vec3 calculateOptimalGeometry(int molecule_type, int atom_index) {
+    Vec3 position = {0, 0, 0};
+    
+    switch(molecule_type) {
+        case 0: // H2O (water)
+            if(atom_index == 0) { // Oxygen at center
+                position.x = 0; position.y = 0; position.z = 0;
+            } else if(atom_index == 1) { // First hydrogen
+                position.x = 0.96f * cosf(H2O_ANGLE/2); 
+                position.y = 0.96f * sinf(H2O_ANGLE/2); 
+                position.z = 0;
+            } else { // Second hydrogen
+                position.x = 0.96f * cosf(-H2O_ANGLE/2); 
+                position.y = 0.96f * sinf(-H2O_ANGLE/2); 
+                position.z = 0;
+            }
+            break;
+            
+        case 1: // NH3 (ammonia)
+            if(atom_index == 0) { // Nitrogen at center
+                position.x = 0; position.y = 0; position.z = 0;
+            } else { // Hydrogens in pyramid
+                float angle = (atom_index - 1) * 2.0f * M_PI / 3.0f;
+                position.x = 1.01f * cosf(angle) * sinf(NH3_ANGLE);
+                position.y = 1.01f * sinf(angle) * sinf(NH3_ANGLE);
+                position.z = 1.01f * cosf(NH3_ANGLE);
+            }
+            break;
+            
+        case 2: // CO2 (linear)
+            if(atom_index == 0) { // Carbon at center
+                position.x = 0; position.y = 0; position.z = 0;
+            } else if(atom_index == 1) { // First oxygen
+                position.x = -1.16f; position.y = 0; position.z = 0;
+            } else { // Second oxygen
+                position.x = 1.16f; position.y = 0; position.z = 0;
+            }
+            break;
+    }
+    
+    return position;
 }
