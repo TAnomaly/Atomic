@@ -8,16 +8,25 @@
 #include <time.h>
 
 // Configuration constants
-#define NUM_ELECTRONS 4
-#define TRAIL_LEN 150
-#define NUCLEUS_RADIUS 0.8f
+#define NUM_MOLECULES 4
+#define NUM_ELECTRONS_PER_MOLECULE 3
+#define TOTAL_ELECTRONS (NUM_MOLECULES * NUM_ELECTRONS_PER_MOLECULE)
+#define TRAIL_LEN 120
+#define NUCLEUS_RADIUS 0.6f
+#define MOLECULE_SEPARATION 8.0f
+
+// Physics constants
+#define ATTRACTION_STRENGTH 0.8f
+#define REPULSION_STRENGTH 1.2f
+#define INTERACTION_RANGE 12.0f
+#define MOLECULAR_SPEED 0.3f
 
 // Visual quality settings for perfect spheres
-#define SPHERE_QUALITY 48  // Higher quality for smoother spheres
-#define GLOW_INTENSITY 0.3f
-#define TRAIL_ALPHA_START 0.9f
+#define SPHERE_QUALITY 36  
+#define GLOW_INTENSITY 0.35f
+#define TRAIL_ALPHA_START 0.8f
 #define TRAIL_ALPHA_END 0.0f
-#define TRAIL_FADE_SPEED 0.015f
+#define TRAIL_FADE_SPEED 0.012f
 
 typedef struct {
     float x, y, z;
@@ -34,37 +43,74 @@ typedef struct {
     float speed;
     float angle_x, angle_y, angle_z;
     Vec3 color;
+    int molecule_id; // Which molecule this electron belongs to
 } Electron;
 
+typedef struct {
+    Vec3 position;
+    Vec3 velocity;
+    Vec3 force;
+    float charge; // Positive for nucleus
+    Vec3 color;
+    float energy_level;
+} Molecule;
+
 // Global state
-TrailPoint electronTrail[NUM_ELECTRONS][TRAIL_LEN];
-int trailIndex[NUM_ELECTRONS] = {0};
-Electron electrons[NUM_ELECTRONS];
+TrailPoint electronTrail[TOTAL_ELECTRONS][TRAIL_LEN];
+int trailIndex[TOTAL_ELECTRONS] = {0};
+Electron electrons[TOTAL_ELECTRONS];
+Molecule molecules[NUM_MOLECULES];
 float global_time = 0.0f;
 
-// Initialize simple atom structure
-void initializeAtom() {
+// Initialize molecular system with interactions
+void initializeMolecularSystem() {
     srand(time(NULL));
     
-    // Initialize electrons with different orbital radii and colors
-    for(int i = 0; i < NUM_ELECTRONS; i++) {
-        electrons[i].radius = 2.5f + i * 1.2f; // Different orbital radii
-        electrons[i].speed = 0.8f + ((float)rand()/RAND_MAX) * 0.6f; // Random speeds
-        electrons[i].angle_x = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
-        electrons[i].angle_y = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
-        electrons[i].angle_z = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+    // Define molecule colors
+    Vec3 molecule_colors[NUM_MOLECULES] = {
+        {1.0f, 0.4f, 0.2f}, // Orange
+        {0.2f, 0.8f, 0.4f}, // Green  
+        {0.4f, 0.3f, 1.0f}, // Blue
+        {0.9f, 0.7f, 0.2f}  // Yellow
+    };
+    
+    // Initialize molecules in different positions
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        float angle = (2.0f * M_PI * i) / NUM_MOLECULES;
+        molecules[i].position.x = MOLECULE_SEPARATION * cosf(angle);
+        molecules[i].position.y = (i % 2 == 0) ? 2.0f : -2.0f;
+        molecules[i].position.z = MOLECULE_SEPARATION * sinf(angle);
         
-        // Different colors for each electron
-        switch(i) {
-            case 0: electrons[i].color = (Vec3){0.2f, 0.8f, 1.0f}; break; // Cyan
-            case 1: electrons[i].color = (Vec3){1.0f, 0.3f, 0.3f}; break; // Red
-            case 2: electrons[i].color = (Vec3){0.3f, 1.0f, 0.3f}; break; // Green
-            case 3: electrons[i].color = (Vec3){1.0f, 0.8f, 0.2f}; break; // Yellow
+        molecules[i].velocity = (Vec3){0, 0, 0};
+        molecules[i].force = (Vec3){0, 0, 0};
+        molecules[i].charge = 6.0f; // Positive charge
+        molecules[i].color = molecule_colors[i];
+        molecules[i].energy_level = 1.0f + ((float)rand()/RAND_MAX) * 0.5f;
+    }
+    
+    // Initialize electrons for each molecule
+    Vec3 electron_colors[NUM_ELECTRONS_PER_MOLECULE] = {
+        {0.3f, 0.9f, 1.0f}, // Cyan
+        {1.0f, 0.4f, 0.6f}, // Pink
+        {0.5f, 1.0f, 0.3f}  // Light Green
+    };
+    
+    for(int mol = 0; mol < NUM_MOLECULES; mol++) {
+        for(int e = 0; e < NUM_ELECTRONS_PER_MOLECULE; e++) {
+            int electron_id = mol * NUM_ELECTRONS_PER_MOLECULE + e;
+            
+            electrons[electron_id].radius = 2.0f + e * 0.8f;
+            electrons[electron_id].speed = 0.6f + ((float)rand()/RAND_MAX) * 0.8f;
+            electrons[electron_id].angle_x = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+            electrons[electron_id].angle_y = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+            electrons[electron_id].angle_z = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+            electrons[electron_id].molecule_id = mol;
+            electrons[electron_id].color = electron_colors[e];
         }
     }
     
     // Initialize all trail points
-    for(int i = 0; i < NUM_ELECTRONS; i++) {
+    for(int i = 0; i < TOTAL_ELECTRONS; i++) {
         for(int j = 0; j < TRAIL_LEN; j++) {
             electronTrail[i][j].position = (Vec3){0, 0, 0};
             electronTrail[i][j].color = electrons[i].color;
@@ -128,19 +174,141 @@ void drawSoftGlow(float radius, GLfloat r, GLfloat g, GLfloat b) {
     glDisable(GL_BLEND);
 }
 
-// Perfect nucleus rendering with proper 3D sphere
-void drawNucleus() {
-    glPushMatrix();
+// Calculate distance between two points
+float calculateDistance(Vec3 a, Vec3 b) {
+    float dx = a.x - b.x;
+    float dy = a.y - b.y; 
+    float dz = a.z - b.z;
+    return sqrtf(dx*dx + dy*dy + dz*dz);
+}
+
+// Calculate molecular forces between molecules
+void calculateMolecularForces() {
+    // Reset forces
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        molecules[i].force = (Vec3){0, 0, 0};
+    }
     
-    // Add subtle pulsing effect for energy
-    float pulse = 1.0f + 0.03f * sinf(global_time * 1.5f);
+    // Calculate forces between each pair of molecules
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        for(int j = i + 1; j < NUM_MOLECULES; j++) {
+            Vec3 pos1 = molecules[i].position;
+            Vec3 pos2 = molecules[j].position;
+            
+            float distance = calculateDistance(pos1, pos2);
+            
+            if(distance < INTERACTION_RANGE && distance > 0.1f) {
+                // Calculate direction vector
+                Vec3 direction = {
+                    (pos2.x - pos1.x) / distance,
+                    (pos2.y - pos1.y) / distance,
+                    (pos2.z - pos1.z) / distance
+                };
+                
+                float force_magnitude;
+                
+                // Van der Waals-like forces: attraction at medium distance, repulsion at close distance
+                if(distance < 4.0f) {
+                    // Strong repulsion at close distance
+                    force_magnitude = -REPULSION_STRENGTH / (distance * distance);
+                } else {
+                    // Weak attraction at medium distance
+                    force_magnitude = ATTRACTION_STRENGTH / (distance * distance * distance);
+                }
+                
+                // Apply forces (Newton's 3rd law)
+                molecules[i].force.x -= direction.x * force_magnitude;
+                molecules[i].force.y -= direction.y * force_magnitude;
+                molecules[i].force.z -= direction.z * force_magnitude;
+                
+                molecules[j].force.x += direction.x * force_magnitude;
+                molecules[j].force.y += direction.y * force_magnitude;
+                molecules[j].force.z += direction.z * force_magnitude;
+            }
+        }
+    }
+}
+
+// Update molecular physics
+void updateMolecularPhysics(float dt) {
+    calculateMolecularForces();
+    
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        // Update velocity based on forces (F = ma, assuming mass = 1)
+        molecules[i].velocity.x += molecules[i].force.x * dt;
+        molecules[i].velocity.y += molecules[i].force.y * dt;
+        molecules[i].velocity.z += molecules[i].force.z * dt;
+        
+        // Apply damping to prevent runaway motion
+        molecules[i].velocity.x *= 0.98f;
+        molecules[i].velocity.y *= 0.98f;
+        molecules[i].velocity.z *= 0.98f;
+        
+        // Update position
+        molecules[i].position.x += molecules[i].velocity.x * dt * MOLECULAR_SPEED;
+        molecules[i].position.y += molecules[i].velocity.y * dt * MOLECULAR_SPEED;
+        molecules[i].position.z += molecules[i].velocity.z * dt * MOLECULAR_SPEED;
+        
+        // Boundary conditions (keep molecules in view)
+        float boundary = 15.0f;
+        if(fabs(molecules[i].position.x) > boundary) molecules[i].velocity.x *= -0.5f;
+        if(fabs(molecules[i].position.y) > boundary) molecules[i].velocity.y *= -0.5f;
+        if(fabs(molecules[i].position.z) > boundary) molecules[i].velocity.z *= -0.5f;
+    }
+}
+
+// Draw interaction lines between close molecules
+void drawMolecularInteractions() {
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glLineWidth(2.0f);
+    
+    for(int i = 0; i < NUM_MOLECULES; i++) {
+        for(int j = i + 1; j < NUM_MOLECULES; j++) {
+            float distance = calculateDistance(molecules[i].position, molecules[j].position);
+            
+            if(distance < INTERACTION_RANGE) {
+                // Color based on interaction type
+                float intensity = 1.0f - (distance / INTERACTION_RANGE);
+                
+                if(distance < 4.0f) {
+                    // Repulsion - red lines
+                    glColor4f(1.0f, 0.2f, 0.2f, intensity * 0.6f);
+                } else {
+                    // Attraction - blue lines
+                    glColor4f(0.2f, 0.6f, 1.0f, intensity * 0.4f);
+                }
+                
+                glBegin(GL_LINES);
+                glVertex3f(molecules[i].position.x, molecules[i].position.y, molecules[i].position.z);
+                glVertex3f(molecules[j].position.x, molecules[j].position.y, molecules[j].position.z);
+                glEnd();
+            }
+        }
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
+}
+
+// Draw individual molecule nucleus
+void drawMoleculeNucleus(int molecule_id) {
+    Vec3 pos = molecules[molecule_id].position;
+    Vec3 color = molecules[molecule_id].color;
+    
+    glPushMatrix();
+    glTranslatef(pos.x, pos.y, pos.z);
+    
+    // Pulsing effect based on energy
+    float pulse = 1.0f + 0.05f * sinf(global_time * 2.0f + molecule_id);
     glScalef(pulse, pulse, pulse);
     
-    // Draw glowing aura first
-    drawSoftGlow(NUCLEUS_RADIUS, 1.0f, 0.4f, 0.1f);
+    // Draw glowing aura
+    drawSoftGlow(NUCLEUS_RADIUS, color.x, color.y, color.z);
     
-    // Draw perfect sphere nucleus
-    drawPerfectSphere(NUCLEUS_RADIUS, 0.95f, 0.6f, 0.2f, 1.0f);
+    // Draw nucleus sphere
+    drawPerfectSphere(NUCLEUS_RADIUS, color.x, color.y, color.z, 1.0f);
     
     glPopMatrix();
 }
@@ -185,28 +353,51 @@ void updateTrail(int electron_id, Vec3 position) {
     }
 }
 
-// Calculate 3D orbital positions with smooth movement
+// Calculate 3D orbital positions relative to molecule center
 Vec3 calculateElectronPosition(int electron_id, float time) {
     Electron* e = &electrons[electron_id];
-    Vec3 pos = {0};
+    Vec3 molecule_pos = molecules[e->molecule_id].position;
+    Vec3 local_pos = {0};
     
     // Update angles for 3D movement
-    e->angle_x += time * e->speed * 0.7f;
-    e->angle_y += time * e->speed * 0.5f;
-    e->angle_z += time * e->speed * 0.3f;
+    e->angle_x += time * e->speed * 0.8f;
+    e->angle_y += time * e->speed * 0.6f;
+    e->angle_z += time * e->speed * 0.4f;
     
-    // Create 3D orbital motion with Lissajous curves for interesting patterns
-    pos.x = e->radius * cosf(e->angle_x) * cosf(e->angle_z * 0.3f);
-    pos.y = e->radius * sinf(e->angle_y) * 0.8f;
-    pos.z = e->radius * sinf(e->angle_x) * sinf(e->angle_z * 0.5f);
+    // Create 3D orbital motion with different patterns for each electron
+    int orbital_type = electron_id % NUM_ELECTRONS_PER_MOLECULE;
     
-    // Add small random variation for more natural look
-    float variation = 0.05f;
-    pos.x += (((float)rand()/RAND_MAX) - 0.5f) * variation;
-    pos.y += (((float)rand()/RAND_MAX) - 0.5f) * variation;
-    pos.z += (((float)rand()/RAND_MAX) - 0.5f) * variation;
+    if(orbital_type == 0) {
+        // Inner orbital - circular
+        local_pos.x = e->radius * cosf(e->angle_x);
+        local_pos.y = e->radius * sinf(e->angle_y) * 0.6f;
+        local_pos.z = e->radius * sinf(e->angle_x);
+    } else if(orbital_type == 1) {
+        // Middle orbital - figure-8 pattern
+        local_pos.x = e->radius * cosf(e->angle_x) * cosf(e->angle_z * 0.5f);
+        local_pos.y = e->radius * sinf(e->angle_y) * 0.8f;
+        local_pos.z = e->radius * sinf(e->angle_x) * sinf(e->angle_z * 0.3f);
+    } else {
+        // Outer orbital - complex 3D pattern
+        local_pos.x = e->radius * cosf(e->angle_x) * sinf(e->angle_z * 0.7f);
+        local_pos.y = e->radius * sinf(e->angle_y) * cosf(e->angle_z * 0.4f);
+        local_pos.z = e->radius * sinf(e->angle_x) * cosf(e->angle_z * 0.6f);
+    }
     
-    return pos;
+    // Add quantum uncertainty
+    float variation = 0.08f;
+    local_pos.x += (((float)rand()/RAND_MAX) - 0.5f) * variation;
+    local_pos.y += (((float)rand()/RAND_MAX) - 0.5f) * variation;
+    local_pos.z += (((float)rand()/RAND_MAX) - 0.5f) * variation;
+    
+    // Transform to world coordinates
+    Vec3 world_pos = {
+        molecule_pos.x + local_pos.x,
+        molecule_pos.y + local_pos.y,
+        molecule_pos.z + local_pos.z
+    };
+    
+    return world_pos;
 }
 
 int main(int argc, char** argv) {
@@ -223,8 +414,8 @@ int main(int argc, char** argv) {
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     if(!ctx){fprintf(stderr,"SDL_GL_CreateContext error: %s\n",SDL_GetError());SDL_DestroyWindow(win);SDL_Quit();return 1;}
 
-    // Initialize atom structure
-    initializeAtom();
+    // Initialize molecular system
+    initializeMolecularSystem();
 
     // Enhanced OpenGL setup for perfect spheres
     glEnable(GL_DEPTH_TEST);
@@ -273,11 +464,13 @@ int main(int argc, char** argv) {
     float camera_angle = 0.0f;
     float camera_distance = 12.0f;
     
-    printf("Controls:\n");
+    printf("=== Molecular Simulation Controls ===\n");
     printf("ESC - Exit\n");
-    printf("Mouse Wheel - Zoom in/out\n");
-    printf("Arrow Keys - Rotate view\n");
-    printf("Space - Reset view\n\n");
+    printf("Arrow Keys - Rotate camera\n");
+    printf("Up/Down Arrow - Zoom in/out\n");
+    printf("Space - Reset view\n");
+    printf("Watch molecules interact with each other!\n");
+    printf("Blue lines = Attraction, Red lines = Repulsion\n\n");
 
     while(running) {
         while(SDL_PollEvent(&ev)) {
@@ -296,7 +489,11 @@ int main(int argc, char** argv) {
             }
         }
 
-        global_time += 0.016f; // ~60 FPS timing
+        float dt = 0.016f; // ~60 FPS timing
+        global_time += dt;
+        
+        // Update molecular physics
+        updateMolecularPhysics(dt);
 
         int w, h;
         SDL_GetWindowSize(win, &w, &h);
@@ -310,19 +507,24 @@ int main(int argc, char** argv) {
         // Dynamic camera movement
         float cam_x = camera_distance * sinf(camera_angle);
         float cam_z = camera_distance * cosf(camera_angle);
-        gluLookAt(cam_x, 3.0, cam_z, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+        gluLookAt(cam_x, 5.0, cam_z, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
         
-        // Dark space background with subtle gradient
-        glClearColor(0.02f, 0.02f, 0.05f, 1.0f);
+        // Dark space background
+        glClearColor(0.01f, 0.01f, 0.03f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Render nucleus with proper structure
-        drawNucleus();
+        // Draw interaction lines between molecules
+        drawMolecularInteractions();
 
-        // Render electrons with 3D motion and trails
-        for(int i = 0; i < NUM_ELECTRONS; i++) {
-            // Calculate new position
-            Vec3 pos = calculateElectronPosition(i, 0.016f);
+        // Render all molecules
+        for(int mol = 0; mol < NUM_MOLECULES; mol++) {
+            drawMoleculeNucleus(mol);
+        }
+
+        // Render all electrons with 3D motion and trails
+        for(int i = 0; i < TOTAL_ELECTRONS; i++) {
+            // Calculate new position relative to molecule
+            Vec3 pos = calculateElectronPosition(i, dt);
             
             // Update trail system
             updateTrail(i, pos);
@@ -336,10 +538,10 @@ int main(int argc, char** argv) {
             Vec3 color = electrons[i].color;
             
             // Draw soft glow around electron
-            drawSoftGlow(0.08f, color.x, color.y, color.z);
+            drawSoftGlow(0.06f, color.x, color.y, color.z);
             
             // Draw perfect electron sphere
-            drawPerfectSphere(0.1f, color.x, color.y, color.z, 0.95f);
+            drawPerfectSphere(0.08f, color.x, color.y, color.z, 0.95f);
             
             glPopMatrix();
         }
