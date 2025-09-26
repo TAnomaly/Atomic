@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 
 // Configuration constants
 #define NUM_MOLECULES 4
@@ -39,6 +40,36 @@
 #define BOND_BREAK_DISTANCE 4.5f
 #define H2O_ANGLE 104.5f * 3.14159f / 180.0f  // Water bond angle
 #define NH3_ANGLE 107.0f * 3.14159f / 180.0f  // Ammonia bond angle
+
+// Cinematic visual constants
+#define MAX_STARS 900
+#define STARFIELD_RADIUS 85.0f
+#define NEBULA_LAYER_COUNT 5
+#define NEBULA_PARTICLES_PER_LAYER 120
+#define NEBULA_OPACITY 0.12f
+#define AUTOPILOT_CAMERA_SPEED 0.08f
+#define AUTOPILOT_DISTANCE_SWING 3.5f
+
+// Supernova event constants
+#define SUPERNOVA_MAX_PARTICLES 600
+#define SUPERNOVA_DURATION 6.0f
+#define SUPERNOVA_EXPANSION_RATE 6.0f
+#define SUPERNOVA_PEAK_INTENSITY 2.4f
+
+// High-fidelity physics constants
+#define COULOMB_CONSTANT 8.9875517923e9f
+#define ELECTRON_PERMITTIVITY 8.8541878128e-12f
+#define COULOMB_SOFTENING 0.25f
+#define COULOMB_SCALAR 1.6e-19f
+#define MORSE_DEPTH 5.5f
+#define MORSE_ALPHA 1.8f
+#define MORSE_EQUILIBRIUM 1.1f
+#define COULOMB_SIMULATION_SCALE 0.015f
+#define ELECTRON_ATTRACTION_SCALE 0.020f
+#define ELECTRON_REPULSION_SCALE 0.008f
+#define ELECTRON_FORCE_DAMPING 0.965f
+#define ELECTRON_RADIUS_MIN 0.45f
+#define ELECTRON_RADIUS_MAX 6.0f
 
 // Molecular interaction constants
 #define BONDING_DISTANCE 3.0f
@@ -92,6 +123,9 @@ typedef struct {
     float angle_x, angle_y, angle_z;
     Vec3 color;
     int molecule_id; // Which molecule this electron belongs to
+    float phase_offset;
+    float energy_level;
+    float base_radius;
 } Electron;
 
 typedef struct {
@@ -109,6 +143,9 @@ typedef struct {
     float electron_affinity;
     int oxidation_state;
     float magnetic_moment;
+    float effective_mass;
+    float bonding_radius;
+    float morse_equilibrium;
 } Molecule;
 
 typedef struct {
@@ -164,6 +201,30 @@ typedef struct {
     float influence_radius;
 } GravitySource;
 
+// Cinematic starfield data
+typedef struct {
+    Vec3 position;
+    float brightness;
+    float twinkle_speed;
+    float color_shift;
+} StarParticle;
+
+typedef struct {
+    Vec3 position;
+    Vec3 color;
+    float size;
+    float rotation;
+} NebulaParticle;
+
+typedef struct {
+    Vec3 position;
+    Vec3 velocity;
+    Vec3 color;
+    float age;
+    float intensity;
+    int active;
+} SupernovaParticle;
+
 // Element database with accurate atomic radii (pm)
 Element elements[] = {
     {1, 1.008f, "H", "Hydrogen", 0.9f, 0.9f, 0.9f, 2.20f, 1},        // 53 pm
@@ -187,6 +248,8 @@ float electromagnetic_field_strength = 1.0f;
 int show_field_lines = 1;
 int mouse_x = 0, mouse_y = 0;
 float external_energy = 0.0f;
+Vec3 electron_forces[TOTAL_ELECTRONS];
+float electron_energy[TOTAL_ELECTRONS];
 
 // New enhanced systems
 ExplosionParticle explosion_particles[MAX_EXPLOSION_PARTICLES];
@@ -198,6 +261,20 @@ int show_gravity_field = 0;
 int show_vdw_potential = 0;
 int show_formed_molecules = 1;
 float bloom_effect_intensity = BLOOM_INTENSITY;
+
+// Cinematic new systems
+StarParticle starfield[MAX_STARS];
+NebulaParticle nebula[NEBULA_LAYER_COUNT * NEBULA_PARTICLES_PER_LAYER];
+SupernovaParticle supernova_particles[SUPERNOVA_MAX_PARTICLES];
+int autopilot_enabled = 0;
+float autopilot_time = 0.0f;
+int show_starfield = 1;
+int show_nebula = 1;
+int show_supernova = 1;
+float supernova_timer = 0.0f;
+int supernova_active = 0;
+int show_energy_spectrum = 1;
+int show_simulation_legend = 1;
 
 // Scientific analysis data
 float total_system_energy = 0.0f;
@@ -221,6 +298,16 @@ int dragging_molecule = -1;
 Vec3 drag_offset = {0, 0, 0};
 int mouse_button_down = 0;
 float chemical_bonds[NUM_MOLECULES][NUM_MOLECULES]; // Bond strengths between molecules
+#define MAX_DYNAMIC_BONDS 16
+typedef struct {
+    int molecule_a;
+    int molecule_b;
+    float bond_strength;
+    float equilibrium_distance;
+    float last_distance;
+} DynamicBond;
+DynamicBond dynamic_bonds[MAX_DYNAMIC_BONDS];
+int dynamic_bond_count = 0;
 
 // Real electron shell configurations
 typedef struct {
@@ -242,6 +329,7 @@ ElectronShell shells[] = {
 
 // Function declarations
 Vec3 calculateElectronPosition(int electron_id, float time);
+Vec3 getElectronReferencePosition(int electron_id);
 void calculateSystemStatistics();
 void drawScientificHUD();
 void changeElementType(int element_index);
@@ -288,6 +376,34 @@ Vec3 calculateOptimalGeometry(int molecule_type, int atom_index);
 void applyShaderEffects();
 void enableDepthBlending();
 void drawParticleGlow(Vec3 position, Vec3 color, float intensity);
+
+// Cinematic rendering functions
+void initializeStarfield();
+void drawStarfield(float camera_angle, float camera_distance);
+void updateStarfield(float dt);
+void initializeNebula();
+void drawNebula();
+void initializeSupernova();
+void triggerSupernova(Vec3 position);
+void updateSupernova(float dt);
+void drawSupernova();
+void updateAutopilotCamera(float* camera_angle, float* camera_distance, float dt);
+
+// Advanced HUD features
+void drawEnergySpectrumHUD();
+void drawSimulationLegend();
+
+// High-fidelity physics
+void initializeDynamicBonds();
+void updateCoulombForces(float dt);
+void applyElectronForces(float dt);
+void updateMorseBonding(float dt);
+void simulateElectronWave(int electron_id, float dt);
+float calculateEffectiveCharge(int molecule_index);
+float calculateCoulombForce(float q1, float q2, float distance);
+float calculateMorseForce(float distance, float equilibrium);
+void applyAdaptiveDamping(float* value, float damping);
+float clampf(float value, float min_val, float max_val);
 
 // Initialize molecular system with interactions
 void initializeMolecularSystem() {
@@ -359,6 +475,11 @@ void initializeMolecularSystem() {
             electronTrail[i][j].color = electrons[i].color;
             electronTrail[i][j].alpha = 0.0f;
         }
+        electron_forces[i] = (Vec3){0, 0, 0};
+        electron_energy[i] = 0.0f;
+        electrons[i].phase_offset = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+        electrons[i].energy_level = 1.0f;
+        electrons[i].base_radius = electrons[i].radius;
     }
     
     // Initialize photon system
@@ -374,6 +495,10 @@ void initializeMolecularSystem() {
     initializeExplosionSystem();
     initializePhysicsExtensions();
     initializeMoleculeFormation();
+    initializeStarfield();
+    initializeNebula();
+    initializeSupernova();
+    initializeDynamicBonds();
     
     // Initialize chemical bonds matrix
     for(int i = 0; i < NUM_MOLECULES; i++) {
@@ -591,6 +716,8 @@ void calculateMolecularForces() {
 // Update molecular physics with vibrations
 void updateMolecularPhysics(float dt) {
     calculateMolecularForces();
+    updateCoulombForces(dt);
+    updateMorseBonding(dt);
     
     for(int i = 0; i < NUM_MOLECULES; i++) {
         // Update velocity based on forces (F = ma, assuming mass = 1)
@@ -1360,7 +1487,11 @@ int main(int argc, char** argv) {
     printf("- Gravitational field effects between molecules\n");
     printf("- Bloom lighting and volumetric rays\n");
     printf("- Real molecular formation (H2, OH, CO, etc.)\n");
-    printf("💫 NEW Controls: X=Explosions, G=Gravity, V=VdW, B=Bloom, N=Molecules\n\n");
+    printf("🌌 Cinematic Universe Mode:\n");
+    printf("- Starfield background, volumetric nebula, and supernova shockwaves\n");
+    printf("- Cinematic autopilot camera with dynamic parallax\n");
+    printf("- Energy spectrum analyzer for electron kinetic bands\n");
+    printf("💫 NEW Controls: X=Explosions, G=Gravity, V=VdW, B=Bloom, N=Molecules, Z=Starfield, K=Nebula, J=Supernova, O=Trigger Supernova, A=Autopilot, L=Legend, U=Energy Spectrum\n\n");
 
     while(running) {
         while(SDL_PollEvent(&ev)) {
@@ -1433,6 +1564,28 @@ int main(int argc, char** argv) {
                     case SDLK_n:
                         show_formed_molecules = !show_formed_molecules;
                         printf("🧪 Formed molecules: %s\n", show_formed_molecules ? "ON" : "OFF"); break;
+                    case SDLK_a:
+                        autopilot_enabled = !autopilot_enabled;
+                        printf("🎥 Cinematic autopilot: %s\n", autopilot_enabled ? "ON" : "OFF"); break;
+                    case SDLK_z:
+                        show_starfield = !show_starfield;
+                        printf("🌠 Starfield: %s\n", show_starfield ? "ON" : "OFF"); break;
+                    case SDLK_k:
+                        show_nebula = !show_nebula;
+                        printf("☁️  Nebula layers: %s\n", show_nebula ? "ON" : "OFF"); break;
+                    case SDLK_j:
+                        show_supernova = !show_supernova;
+                        printf("🌟 Supernova events: %s\n", show_supernova ? "ENABLED" : "DISABLED"); break;
+                    case SDLK_o:
+                        // Trigger cinematic supernova at scene center
+                        triggerSupernova((Vec3){0.0f, 0.0f, 0.0f});
+                        printf("🌠 SUPERNOVA initiated! Brace for impact!\n"); break;
+                    case SDLK_l:
+                        show_simulation_legend = !show_simulation_legend;
+                        printf("📘 Legend overlay: %s\n", show_simulation_legend ? "ON" : "OFF"); break;
+                    case SDLK_u:
+                        show_energy_spectrum = !show_energy_spectrum;
+                        printf("📊 Energy spectrum HUD: %s\n", show_energy_spectrum ? "VISIBLE" : "HIDDEN"); break;
                 }
                 if(camera_distance < 5.0f) camera_distance = 5.0f;
                 if(camera_distance > 25.0f) camera_distance = 25.0f;
@@ -1450,7 +1603,7 @@ int main(int argc, char** argv) {
         // Performance monitoring
         Uint32 current_time = SDL_GetTicks();
         updatePerformanceStats(current_time);
-        
+
         float dt = 0.016f; // ~60 FPS timing
         global_time += dt;
         
@@ -1462,6 +1615,7 @@ int main(int argc, char** argv) {
         
         // Update electron-nucleus binding forces
         updateElectronMoleculeBinding();
+        applyElectronForces(dt);
         
         // Update electron speeds based on temperature
         updateElectronSpeedFromTemperature();
@@ -1470,6 +1624,13 @@ int main(int argc, char** argv) {
         calculateGravitationalForces();
         calculateEnhancedVdWForces();
         updateMagneticDipoles();
+        
+        // Starfield & cinematic updates
+        if(autopilot_enabled) {
+            updateAutopilotCamera(&camera_angle, &camera_distance, dt);
+        }
+        updateStarfield(dt);
+        updateSupernova(dt);
         
         // Molecular formation system
         checkMoleculeFormation();
@@ -1508,13 +1669,18 @@ int main(int argc, char** argv) {
         // Draw electromagnetic field
         drawElectromagneticField();
 
+        // Draw cinematic background
+        drawStarfield(camera_angle, camera_distance);
+        drawNebula();
+        drawSupernova();
+
         // Draw enhanced physics visualizations
         drawGravityField();
         drawVdWPotential();
-        
+
         // Draw interaction lines between molecules
         drawMolecularInteractions();
-        
+
         // Draw chemical bonds
         drawChemicalBonds();
         
@@ -1541,6 +1707,7 @@ int main(int argc, char** argv) {
         // Render all electrons with 3D motion and trails
         for(int i = 0; i < TOTAL_ELECTRONS; i++) {
             // Calculate new position relative to molecule
+            simulateElectronWave(i, dt);
             Vec3 pos = calculateElectronPosition(i, dt);
             
             // Update trail system
@@ -1575,6 +1742,8 @@ int main(int argc, char** argv) {
         
         // Draw scientific HUD
         drawScientificHUD();
+        if(show_energy_spectrum) drawEnergySpectrumHUD();
+        if(show_simulation_legend) drawSimulationLegend();
         
         // Draw performance overlay
         drawPerformanceOverlay();
@@ -2163,6 +2332,406 @@ void drawParticleGlow(Vec3 position, Vec3 color, float intensity) {
 }
 
 // ================================
+// CINEMATIC BACKGROUND RENDERING
+// ================================
+
+void initializeStarfield() {
+    for(int i = 0; i < MAX_STARS; i++) {
+        float theta = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+        float u = ((float)rand()/RAND_MAX) * 2.0f - 1.0f; // cos(phi)
+        float phi = acosf(fmaxf(fminf(u, 1.0f), -1.0f));
+        float radius = STARFIELD_RADIUS * (0.6f + ((float)rand()/RAND_MAX) * 0.4f);
+        
+        starfield[i].position.x = radius * sinf(phi) * cosf(theta);
+        starfield[i].position.y = radius * cosf(phi);
+        starfield[i].position.z = radius * sinf(phi) * sinf(theta);
+        starfield[i].brightness = 0.35f + ((float)rand()/RAND_MAX) * 0.65f;
+        starfield[i].twinkle_speed = 0.8f + ((float)rand()/RAND_MAX) * 1.6f;
+        starfield[i].color_shift = ((float)rand()/RAND_MAX);
+    }
+}
+
+void updateStarfield(float dt) {
+    (void)dt; // Currently unused parameter but kept for future dynamic updates
+    for(int i = 0; i < MAX_STARS; i++) {
+        starfield[i].color_shift += starfield[i].twinkle_speed * 0.01f;
+        if(starfield[i].color_shift > 1.0f) {
+            starfield[i].color_shift -= 1.0f;
+        }
+    }
+    
+    for(int i = 0; i < NEBULA_LAYER_COUNT * NEBULA_PARTICLES_PER_LAYER; i++) {
+        nebula[i].rotation += 0.05f + nebula[i].size * 0.02f;
+        if(nebula[i].rotation > 360.0f) nebula[i].rotation -= 360.0f;
+    }
+}
+
+void drawStarfield(float camera_angle, float camera_distance) {
+    if(!show_starfield) return;
+    (void)camera_distance; // Reserved for future parallax effects
+    
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glPointSize(2.5f);
+    
+    glPushMatrix();
+    float camera_angle_deg = -camera_angle * (180.0f / (float)M_PI);
+    glRotatef(camera_angle_deg, 0.0f, 1.0f, 0.0f);
+    
+    glBegin(GL_POINTS);
+    for(int i = 0; i < MAX_STARS; i++) {
+        float twinkle = 0.5f + 0.5f * sinf((global_time * starfield[i].twinkle_speed) + starfield[i].color_shift * 6.28318f);
+        float brightness = starfield[i].brightness * twinkle;
+        float color_variation = 0.6f + 0.4f * sinf(starfield[i].color_shift * 6.28318f);
+        
+        float r = brightness;
+        float g = brightness * (0.8f + 0.2f * color_variation);
+        float b = brightness * (0.7f + 0.3f * (1.0f - color_variation));
+        
+        glColor4f(r, g, b, twinkle * 0.9f);
+        glVertex3f(starfield[i].position.x, starfield[i].position.y, starfield[i].position.z);
+    }
+    glEnd();
+    
+    glPopMatrix();
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+}
+
+void initializeNebula() {
+    Vec3 layer_colors[NEBULA_LAYER_COUNT] = {
+        {0.3f, 0.5f, 0.9f},
+        {0.7f, 0.3f, 0.8f},
+        {0.4f, 0.8f, 0.7f},
+        {0.9f, 0.6f, 0.3f},
+        {0.8f, 0.2f, 0.4f}
+    };
+    
+    for(int layer = 0; layer < NEBULA_LAYER_COUNT; layer++) {
+        for(int p = 0; p < NEBULA_PARTICLES_PER_LAYER; p++) {
+            int idx = layer * NEBULA_PARTICLES_PER_LAYER + p;
+            float theta = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+            float radius = STARFIELD_RADIUS * 0.4f * (0.4f + ((float)rand()/RAND_MAX) * 0.6f);
+            float height = ( ((float)rand()/RAND_MAX) - 0.5f) * STARFIELD_RADIUS * 0.3f;
+            
+            nebula[idx].position.x = radius * cosf(theta);
+            nebula[idx].position.y = height;
+            nebula[idx].position.z = radius * sinf(theta);
+            
+            nebula[idx].color = layer_colors[layer];
+            nebula[idx].size = 1.5f + ((float)rand()/RAND_MAX) * 3.0f + layer * 0.4f;
+            nebula[idx].rotation = ((float)rand()/RAND_MAX) * 360.0f;
+        }
+    }
+}
+
+void drawNebula() {
+    if(!show_nebula) return;
+    
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    
+    GLUquadric* quad = gluNewQuadric();
+    
+    for(int i = 0; i < NEBULA_LAYER_COUNT * NEBULA_PARTICLES_PER_LAYER; i++) {
+        float pulse = 0.6f + 0.4f * sinf(global_time * 0.3f + nebula[i].rotation);
+        float alpha = NEBULA_OPACITY * pulse;
+        
+        glPushMatrix();
+        glTranslatef(nebula[i].position.x, nebula[i].position.y, nebula[i].position.z);
+        glRotatef(nebula[i].rotation + global_time * 2.0f, 0.0f, 1.0f, 0.0f);
+        glColor4f(nebula[i].color.x, nebula[i].color.y, nebula[i].color.z, alpha);
+        gluSphere(quad, nebula[i].size, 10, 10);
+        glPopMatrix();
+    }
+    
+    gluDeleteQuadric(quad);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+}
+
+void initializeSupernova() {
+    for(int i = 0; i < SUPERNOVA_MAX_PARTICLES; i++) {
+        supernova_particles[i].active = 0;
+        supernova_particles[i].age = 0.0f;
+        supernova_particles[i].intensity = 0.0f;
+    }
+    supernova_active = 0;
+    supernova_timer = 0.0f;
+}
+
+void triggerSupernova(Vec3 position) {
+    if(!show_supernova) return;
+    supernova_active = 1;
+    supernova_timer = 0.0f;
+    
+    for(int i = 0; i < SUPERNOVA_MAX_PARTICLES; i++) {
+        float theta = ((float)rand()/RAND_MAX) * 2.0f * M_PI;
+        float u = ((float)rand()/RAND_MAX) * 2.0f - 1.0f;
+        float phi = acosf(fmaxf(fminf(u, 1.0f), -1.0f));
+        float speed = SUPERNOVA_EXPANSION_RATE * (0.5f + ((float)rand()/RAND_MAX));
+        
+        Vec3 direction = {
+            sinf(phi) * cosf(theta),
+            cosf(phi),
+            sinf(phi) * sinf(theta)
+        };
+        
+        supernova_particles[i].position = position;
+        supernova_particles[i].velocity.x = direction.x * speed;
+        supernova_particles[i].velocity.y = direction.y * speed;
+        supernova_particles[i].velocity.z = direction.z * speed;
+        
+        supernova_particles[i].color.x = 1.0f;
+        supernova_particles[i].color.y = 0.6f + ((float)rand()/RAND_MAX) * 0.4f;
+        supernova_particles[i].color.z = 0.2f + ((float)rand()/RAND_MAX) * 0.3f;
+        
+        supernova_particles[i].age = 0.0f;
+        supernova_particles[i].intensity = SUPERNOVA_PEAK_INTENSITY * (0.6f + ((float)rand()/RAND_MAX) * 0.4f);
+        supernova_particles[i].active = 1;
+    }
+}
+
+void updateSupernova(float dt) {
+    if(!supernova_active) return;
+    supernova_timer += dt;
+    
+    for(int i = 0; i < SUPERNOVA_MAX_PARTICLES; i++) {
+        if(!supernova_particles[i].active) continue;
+        
+        supernova_particles[i].age += dt;
+        if(supernova_particles[i].age > SUPERNOVA_DURATION) {
+            supernova_particles[i].active = 0;
+            continue;
+        }
+        
+        float decay = 1.0f - (supernova_particles[i].age / SUPERNOVA_DURATION);
+        if(decay < 0.0f) decay = 0.0f;
+        
+        supernova_particles[i].intensity = SUPERNOVA_PEAK_INTENSITY * decay;
+        supernova_particles[i].position.x += supernova_particles[i].velocity.x * dt;
+        supernova_particles[i].position.y += supernova_particles[i].velocity.y * dt;
+        supernova_particles[i].position.z += supernova_particles[i].velocity.z * dt;
+    }
+    
+    if(supernova_timer >= SUPERNOVA_DURATION) {
+        supernova_active = 0;
+    }
+}
+
+void drawSupernova() {
+    if(!show_supernova || !supernova_active) return;
+    
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    
+    for(int i = 0; i < SUPERNOVA_MAX_PARTICLES; i++) {
+        if(!supernova_particles[i].active) continue;
+        float alpha = fmaxf(0.0f, fminf(1.0f, supernova_particles[i].intensity));
+        drawParticleGlow(supernova_particles[i].position, supernova_particles[i].color, alpha);
+    }
+    
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_LIGHTING);
+}
+
+void updateAutopilotCamera(float* camera_angle, float* camera_distance, float dt) {
+    if(!autopilot_enabled || !camera_angle || !camera_distance) return;
+    autopilot_time += dt;
+    if(autopilot_time > 10000.0f) autopilot_time -= 10000.0f;
+    
+    float slow_orbit = autopilot_time * AUTOPILOT_CAMERA_SPEED;
+    float gentle_wave = sinf(autopilot_time * 0.6f) * 0.5f;
+    *camera_angle = slow_orbit + gentle_wave;
+    
+    float distance_variation = sinf(autopilot_time * 0.45f) * AUTOPILOT_DISTANCE_SWING;
+    *camera_distance = 11.5f + distance_variation;
+    if(*camera_distance < 7.0f) *camera_distance = 7.0f;
+    if(*camera_distance > 18.0f) *camera_distance = 18.0f;
+}
+
+void drawEnergySpectrumHUD() {
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0, 1200, 900, 0, -1, 1);
+    
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    float panel_left = 820.0f;
+    float panel_right = 1180.0f;
+    float panel_top = 40.0f;
+    float panel_bottom = 260.0f;
+    
+    glColor4f(0.05f, 0.05f, 0.15f, 0.65f);
+    glBegin(GL_QUADS);
+    glVertex2f(panel_left, panel_top);
+    glVertex2f(panel_right, panel_top);
+    glVertex2f(panel_right, panel_bottom);
+    glVertex2f(panel_left, panel_bottom);
+    glEnd();
+    
+    float bins[5] = {0};
+    for(int i = 0; i < TOTAL_ELECTRONS; i++) {
+        float kinetic_proxy = electrons[i].speed * electrons[i].speed;
+        int bin_index = (int)fminf(4.0f, kinetic_proxy * 1.2f);
+        if(bin_index < 0) bin_index = 0;
+        bins[bin_index] += kinetic_proxy;
+    }
+    
+    float max_value = 0.0f;
+    for(int i = 0; i < 5; i++) {
+        if(bins[i] > max_value) max_value = bins[i];
+    }
+    if(max_value < 0.001f) max_value = 0.001f;
+    
+    float bar_width = (panel_right - panel_left - 60.0f) / 5.0f;
+    float base_x = panel_left + 30.0f;
+    float base_y = panel_bottom - 30.0f;
+    float max_bar_height = (panel_bottom - panel_top) - 80.0f;
+    
+    Vec3 bin_colors[5] = {
+        {0.3f, 0.8f, 1.0f},
+        {0.4f, 1.0f, 0.6f},
+        {1.0f, 0.9f, 0.3f},
+        {1.0f, 0.6f, 0.2f},
+        {1.0f, 0.3f, 0.3f}
+    };
+    
+    for(int i = 0; i < 5; i++) {
+        float normalized = bins[i] / max_value;
+        float bar_height = normalized * max_bar_height;
+        float x0 = base_x + i * bar_width;
+        float x1 = x0 + bar_width * 0.6f;
+        float y1 = base_y - bar_height;
+        
+        glColor4f(bin_colors[i].x, bin_colors[i].y, bin_colors[i].z, 0.85f);
+        glBegin(GL_QUADS);
+        glVertex2f(x0, base_y);
+        glVertex2f(x1, base_y);
+        glVertex2f(x1, y1);
+        glVertex2f(x0, y1);
+        glEnd();
+        
+        glColor4f(1.0f, 1.0f, 1.0f, 0.25f);
+        glBegin(GL_QUADS);
+        glVertex2f(x0, base_y);
+        glVertex2f(x1, base_y);
+        glVertex2f(x1, y1 + 10.0f);
+        glVertex2f(x0, y1 + 10.0f);
+        glEnd();
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+    
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
+void drawSimulationLegend() {
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0, 1200, 900, 0, -1, 1);
+    
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    float panel_left = 30.0f;
+    float panel_top = 330.0f;
+    float panel_right = 380.0f;
+    float panel_bottom = 540.0f;
+    
+    glColor4f(0.06f, 0.08f, 0.18f, 0.7f);
+    glBegin(GL_QUADS);
+    glVertex2f(panel_left, panel_top);
+    glVertex2f(panel_right, panel_top);
+    glVertex2f(panel_right, panel_bottom);
+    glVertex2f(panel_left, panel_bottom);
+    glEnd();
+    
+    float icon_size = 18.0f;
+    float icon_spacing = 26.0f;
+    float text_offset = 50.0f;
+    float base_x = panel_left + 25.0f;
+    float base_y = panel_top + 40.0f;
+    
+    struct LegendItem { Vec3 color; const char* label; };
+    struct LegendItem items[] = {
+        {{0.2f, 0.6f, 1.0f}, "Electromagnetic Field Lines (F)"},
+        {{0.8f, 0.6f, 0.2f}, "Gravitational Flux (G)"},
+        {{0.2f, 0.8f, 0.9f}, "Van der Waals Potential (V)"},
+        {{0.9f, 0.9f, 0.2f}, "Active Chemical Bonds"},
+        {{0.9f, 0.5f, 1.0f}, "Quantum Tunneling Events"},
+        {{0.2f, 0.8f, 0.3f}, "Molecule Formation (N)"},
+        {{1.0f, 0.4f, 0.2f}, "Supernova Shockfront (O)"},
+        {{0.3f, 0.5f, 0.9f}, "Stellar Nebula Layers (K)"},
+        {{0.8f, 0.8f, 0.8f}, "Starfield Parallax (Z)"}
+    };
+    int item_count = sizeof(items) / sizeof(items[0]);
+    
+    for(int i = 0; i < item_count; i++) {
+        float y = base_y + i * icon_spacing;
+        glColor4f(items[i].color.x, items[i].color.y, items[i].color.z, 0.95f);
+        glBegin(GL_QUADS);
+        glVertex2f(base_x, y - icon_size/2);
+        glVertex2f(base_x + icon_size, y - icon_size/2);
+        glVertex2f(base_x + icon_size, y + icon_size/2);
+        glVertex2f(base_x, y + icon_size/2);
+        glEnd();
+        
+        glColor4f(1.0f, 1.0f, 1.0f, 0.9f);
+        glBegin(GL_LINES);
+        glVertex2f(base_x + icon_size + 6.0f, y);
+        glVertex2f(base_x + icon_size + 12.0f, y);
+        glEnd();
+        
+        glColor4f(0.85f, 0.95f, 1.0f, 0.9f);
+        glBegin(GL_QUADS);
+        glVertex2f(base_x + icon_size + 15.0f, y - icon_size/2 + 4.0f);
+        glVertex2f(base_x + icon_size + text_offset + 240.0f, y - icon_size/2 + 4.0f);
+        glVertex2f(base_x + icon_size + text_offset + 240.0f, y + icon_size/2 - 4.0f);
+        glVertex2f(base_x + icon_size + 15.0f, y + icon_size/2 - 4.0f);
+        glEnd();
+    }
+    
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+    
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
+// ================================
 // PHYSICS EXTENSIONS
 // ================================
 
@@ -2526,4 +3095,188 @@ Vec3 calculateOptimalGeometry(int molecule_type, int atom_index) {
     }
     
     return position;
+}
+
+float clampf(float value, float min_value, float max_value) {
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
+void applyAdaptiveDamping(float* value, float damping) {
+    if (!value) return;
+    *value *= damping;
+}
+
+float calculateCoulombForce(float q1, float q2, float distance) {
+    float softened_distance = fmaxf(distance, COULOMB_SOFTENING);
+    float force = (COULOMB_CONSTANT * q1 * q2) / (softened_distance * softened_distance);
+    return force * COULOMB_SIMULATION_SCALE;
+}
+
+float calculateMorseForce(float distance, float equilibrium) {
+    float displacement = distance - equilibrium;
+    float exp_term = expf(-MORSE_ALPHA * displacement);
+    float force = 2.0f * MORSE_DEPTH * MORSE_ALPHA * (1.0f - exp_term) * exp_term;
+    return force;
+}
+
+float calculateEffectiveCharge(int molecule_index) {
+    Molecule* mol = &molecules[molecule_index];
+    float base_charge = mol->charge * COULOMB_SCALAR;
+    float temp_adjustment = 1.0f + (mol->temperature - 300.0f) / 900.0f;
+    float bond_influence = 1.0f + chemical_bonds[molecule_index][molecule_index] * 0.1f;
+    float effective_charge = base_charge * temp_adjustment * bond_influence;
+    if (effective_charge < 1e-21f) effective_charge = 1e-21f;
+    return effective_charge;
+}
+
+void initializeDynamicBonds() {
+    dynamic_bond_count = 0;
+    for (int i = 0; i < MAX_DYNAMIC_BONDS; i++) {
+        dynamic_bonds[i].molecule_a = -1;
+        dynamic_bonds[i].molecule_b = -1;
+        dynamic_bonds[i].bond_strength = 0.0f;
+        dynamic_bonds[i].equilibrium_distance = MORSE_EQUILIBRIUM;
+        dynamic_bonds[i].last_distance = 0.0f;
+    }
+}
+
+void updateMorseBonding(float dt) {
+    (void)dt;
+    for (int i = 0; i < NUM_MOLECULES; i++) {
+        for (int j = i + 1; j < NUM_MOLECULES; j++) {
+            float distance = calculateDistance(molecules[i].position, molecules[j].position);
+            if (distance < BOND_FORMATION_DISTANCE * 1.5f) {
+                float equilibrium = (molecules[i].element->atomic_mass + molecules[j].element->atomic_mass) * 0.02f;
+                float morse_force = calculateMorseForce(distance, equilibrium);
+                Vec3 direction = {
+                    (molecules[j].position.x - molecules[i].position.x) / distance,
+                    (molecules[j].position.y - molecules[i].position.y) / distance,
+                    (molecules[j].position.z - molecules[i].position.z) / distance
+                };
+                molecules[i].force.x += direction.x * morse_force;
+                molecules[i].force.y += direction.y * morse_force;
+                molecules[i].force.z += direction.z * morse_force;
+                molecules[j].force.x -= direction.x * morse_force;
+                molecules[j].force.y -= direction.y * morse_force;
+                molecules[j].force.z -= direction.z * morse_force;
+            }
+        }
+    }
+}
+
+void updateCoulombForces(float dt) {
+    (void)dt;
+    for (int i = 0; i < NUM_MOLECULES; i++) {
+        float charge_i = calculateEffectiveCharge(i);
+        for (int j = i + 1; j < NUM_MOLECULES; j++) {
+            float charge_j = calculateEffectiveCharge(j);
+            Vec3 delta = {
+                molecules[j].position.x - molecules[i].position.x,
+                molecules[j].position.y - molecules[i].position.y,
+                molecules[j].position.z - molecules[i].position.z
+            };
+            float distance = sqrtf(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+            if (distance < 0.01f) distance = 0.01f;
+            float force = calculateCoulombForce(charge_i, charge_j, distance);
+            Vec3 direction = {
+                delta.x / distance,
+                delta.y / distance,
+                delta.z / distance
+            };
+            molecules[i].force.x += direction.x * force;
+            molecules[i].force.y += direction.y * force;
+            molecules[i].force.z += direction.z * force;
+            molecules[j].force.x -= direction.x * force;
+            molecules[j].force.y -= direction.y * force;
+            molecules[j].force.z -= direction.z * force;
+        }
+    }
+}
+
+void simulateElectronWave(int electron_id, float dt) {
+    Electron* e = &electrons[electron_id];
+    float energy = electrons[electron_id].energy_level;
+    float oscillation = 0.4f + 0.3f * sinf(global_time * (0.8f + 0.2f * energy) + e->phase_offset);
+    float modulation = 0.2f * sinf(global_time * 1.3f + electron_id * 0.5f);
+    e->radius = clampf(e->base_radius * (1.0f + oscillation + modulation), ELECTRON_RADIUS_MIN, ELECTRON_RADIUS_MAX);
+    electron_energy[electron_id] = energy * e->radius;
+    applyAdaptiveDamping(&electron_energy[electron_id], 0.995f);
+    (void)dt;
+}
+
+Vec3 getElectronReferencePosition(int electron_id) {
+    Electron* e = &electrons[electron_id];
+    Vec3 base = {0};
+    int orbital_type = electron_id % NUM_ELECTRONS_PER_MOLECULE;
+    switch (orbital_type) {
+        case 0:
+            base.x = e->base_radius;
+            break;
+        case 1:
+            base.y = e->base_radius;
+            break;
+        default:
+            base.z = e->base_radius;
+            break;
+    }
+    return base;
+}
+
+void applyElectronForces(float dt) {
+    for (int i = 0; i < TOTAL_ELECTRONS; i++) {
+        electron_forces[i] = (Vec3){0, 0, 0};
+    }
+    for (int i = 0; i < TOTAL_ELECTRONS; i++) {
+        Vec3 pos_i = calculateElectronPosition(i, 0);
+        for (int j = i + 1; j < TOTAL_ELECTRONS; j++) {
+            Vec3 pos_j = calculateElectronPosition(j, 0);
+            Vec3 delta = {
+                pos_j.x - pos_i.x,
+                pos_j.y - pos_i.y,
+                pos_j.z - pos_i.z
+            };
+            float distance = sqrtf(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+            if (distance < 0.1f) distance = 0.1f;
+            float repulsion = ELECTRON_REPULSION_SCALE / (distance * distance);
+            Vec3 dir = {
+                delta.x / distance,
+                delta.y / distance,
+                delta.z / distance
+            };
+            electron_forces[i].x -= dir.x * repulsion;
+            electron_forces[i].y -= dir.y * repulsion;
+            electron_forces[i].z -= dir.z * repulsion;
+            electron_forces[j].x += dir.x * repulsion;
+            electron_forces[j].y += dir.y * repulsion;
+            electron_forces[j].z += dir.z * repulsion;
+        }
+    }
+    for (int i = 0; i < TOTAL_ELECTRONS; i++) {
+        Electron* e = &electrons[i];
+        Vec3 nucleus_pos = molecules[e->molecule_id].position;
+        Vec3 electron_pos = calculateElectronPosition(i, 0);
+        Vec3 attraction = {
+            nucleus_pos.x - electron_pos.x,
+            nucleus_pos.y - electron_pos.y,
+            nucleus_pos.z - electron_pos.z
+        };
+        float distance = sqrtf(attraction.x * attraction.x + attraction.y * attraction.y + attraction.z * attraction.z);
+        if (distance < 0.2f) distance = 0.2f;
+        float pull = ELECTRON_ATTRACTION_SCALE / distance;
+        electron_forces[i].x += attraction.x / distance * pull;
+        electron_forces[i].y += attraction.y / distance * pull;
+        electron_forces[i].z += attraction.z / distance * pull;
+    }
+    for (int i = 0; i < TOTAL_ELECTRONS; i++) {
+        Electron* e = &electrons[i];
+        Vec3 force = electron_forces[i];
+        e->angle_x += force.x * dt;
+        e->angle_y += force.y * dt;
+        e->angle_z += force.z * dt;
+        applyAdaptiveDamping(&e->angle_x, ELECTRON_FORCE_DAMPING);
+        applyAdaptiveDamping(&e->angle_y, ELECTRON_FORCE_DAMPING);
+        applyAdaptiveDamping(&e->angle_z, ELECTRON_FORCE_DAMPING);
+    }
 }
